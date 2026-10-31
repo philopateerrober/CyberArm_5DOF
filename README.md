@@ -1,11 +1,11 @@
-# Al-Hanash Al-Ali (الحنش الآلي) — 5-DOF Wireless Teleoperated Robotic Arm
+CyberArm— 5-DOF Wireless Teleoperated Robotic Arm
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Framework: Arduino / ESP-IDF](https://img.shields.io/badge/Framework-Arduino%20Core%20v3.x-teal.svg)](https://github.com/espressif/arduino-esp32)
 [![Hardware: ESP32--C3](https://img.shields.io/badge/Glove-ESP32--C3%20SuperMini-darkblue.svg)](https://www.espressif.com/en/products/socs/esp32-c3)
 [![Hardware: ESP32--WROOM](https://img.shields.io/badge/Arm-ESP32--WROOM--32-red.svg)](https://www.espressif.com/en/products/socs/esp32)
 
-> **Al-Hanash Al-Ali** is a high-performance, 5-Degree-of-Freedom (5-DOF) wireless teleoperated robotic arm system. It features bidirectional dual-wireless communication via low-latency ESP-NOW and Wi-Fi WebSockets, a sensory smart glove with haptic force-feedback, an edge AI computer vision pipeline powered by Google MediaPipe, and a real-time Three.js 3D Digital Twin Ground Control Station (GCS).
+> **CyberArm** is a high-performance, 5-Degree-of-Freedom (5-DOF) wireless teleoperated robotic arm system. It features bidirectional dual-wireless communication via low-latency ESP-NOW and Wi-Fi WebSockets, a sensory smart glove with haptic force-feedback, an edge AI computer vision pipeline powered by Google MediaPipe, and a real-time Three.js 3D Digital Twin Ground Control Station (GCS).
 
 ---
 
