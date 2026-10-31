@@ -1,4 +1,4 @@
-CyberArm— 5-DOF Wireless Teleoperated Robotic Arm
+# CyberArm — 5-DOF Wireless Teleoperated Robotic Arm
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Framework: Arduino / ESP-IDF](https://img.shields.io/badge/Framework-Arduino%20Core%20v3.x-teal.svg)](https://github.com/espressif/arduino-esp32)
