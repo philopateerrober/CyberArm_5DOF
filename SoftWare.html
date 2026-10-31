@@ -1,0 +1,2130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AL-HANASH AL-ALI // 5-DOF GROUND CONTROL STATION</title>
+
+  <!-- Sci-Fi Fonts (Cairo = Arabic title) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@700;900&family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+
+  <!-- Three.js (3D Digital Twin) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <!-- Google MediaPipe Hands (AI Computer Vision) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <!--
+    HOW TO USE
+    1. Open this file directly (file://) or serve it over plain http://. An https:// page cannot open ws:// sockets.
+    2. Join the same Wi-Fi as the arm (your router, or the arm's access point "CyberArm_GCS").
+    3. Type the arm's IP (or alhawnash.local) in the header box and press CONNECT WI-FI. AP default: 192.168.4.1
+
+    POSE SOURCES (deterministic - the twin never moves by itself)
+      * Arm connected, any mode except CAMERA_CV : twin = telemetry "angles" (actual servo angles streamed by the arm,
+                                                   which the arm derives from the ESP-NOW glove in GLOVE MANUAL).
+      * CAMERA_CV (AI CAMERA VISION)             : twin + arm = filtered MediaPipe hand pose (ANGLES stream).
+      * No hand / no glove motion / no packets   : every joint holds its exact last pose (no drift, no jitter).
+      * Telemetry or camera frames stall         : pose freezes and a link warning is raised on the twin and header.
+  -->
+
+  <style>
+    :root {
+      --bg-deep: #04070d;
+      --bg-panel: rgba(8, 17, 30, 0.82);
+      --bg-card: rgba(11, 24, 43, 0.75);
+      --cyan: #00f3ff;
+      --cyan-dim: rgba(0, 243, 255, 0.18);
+      --blue: #0077ff;
+      --amber: #ff9d00;
+      --amber-dim: rgba(255, 157, 0, 0.2);
+      --red: #ff0055;
+      --red-dim: rgba(255, 0, 85, 0.25);
+      --green: #00ff9d;
+      --text-main: #e2f4ff;
+      --text-muted: #6c93b0;
+      --font-display: 'Orbitron', sans-serif;
+      --font-ui: 'Rajdhani', sans-serif;
+      --font-mono: 'Share Tech Mono', monospace;
+      --font-ar: 'Cairo', 'Rajdhani', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+
+    body {
+      background-color: var(--bg-deep);
+      color: var(--text-main);
+      font-family: var(--font-ui);
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      background-image:
+        radial-gradient(circle at 50% 50%, rgba(0, 119, 255, 0.08) 0%, transparent 70%),
+        linear-gradient(rgba(0, 243, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 243, 255, 0.03) 1px, transparent 1px);
+      background-size: 100% 100%, 32px 32px, 32px 32px;
+      position: relative;
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.22) 50%);
+      background-size: 100% 4px;
+      pointer-events: none;
+      z-index: 900;
+      opacity: 0.45;
+    }
+
+    /* ===== BOOT OVERLAY ===== */
+    #boot-screen {
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(circle at center, #081526 0%, #020408 100%);
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      transition: opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1), transform 0.8s ease;
+    }
+    #boot-screen.hidden { opacity: 0; transform: scale(1.06); pointer-events: none; }
+
+    .reactor-wrap { position: relative; width: 220px; height: 220px; display: flex; align-items: center; justify-content: center; margin-bottom: 28px; }
+    .reactor-ring { position: absolute; border-radius: 50%; border: 2px solid transparent; }
+    .ring-1 { width: 220px; height: 220px; border-top-color: var(--cyan); border-bottom-color: var(--cyan); box-shadow: 0 0 25px rgba(0, 243, 255, 0.35); animation: spinCW 4s linear infinite; }
+    .ring-2 { width: 176px; height: 176px; border-left-color: var(--amber); border-right-color: var(--amber); animation: spinCCW 2.8s linear infinite; }
+    .ring-3 { width: 132px; height: 132px; border: 1px dashed var(--cyan); animation: spinCW 8s linear infinite; }
+    .reactor-core { font-family: var(--font-ar); font-size: 1.5rem; font-weight: 900; color: var(--cyan); letter-spacing: 1px; text-shadow: 0 0 12px var(--cyan); text-align: center; line-height: 1.25; }
+    .reactor-core small { display: block; font-family: var(--font-display); font-size: 0.62rem; letter-spacing: 3px; color: var(--amber); }
+    @keyframes spinCW { to { transform: rotate(360deg); } }
+    @keyframes spinCCW { to { transform: rotate(-360deg); } }
+
+    .boot-title { font-family: var(--font-display); font-size: 1.5rem; letter-spacing: 6px; color: var(--text-main); text-shadow: 0 0 15px var(--cyan); margin-bottom: 14px; text-align: center; }
+    .boot-terminal { width: 560px; max-width: 90vw; height: 150px; background: rgba(4, 12, 24, 0.9); border: 1px solid var(--cyan-dim); border-left: 3px solid var(--cyan); padding: 12px 16px; font-family: var(--font-mono); font-size: 0.85rem; color: var(--cyan); overflow-y: auto; margin-bottom: 16px; box-shadow: inset 0 0 20px rgba(0, 243, 255, 0.08); }
+    .boot-line { margin-bottom: 4px; opacity: 0.9; }
+    .boot-line span.ok { color: var(--green); }
+    .boot-line span.warn { color: var(--amber); }
+    .boot-progress-bar { width: 560px; max-width: 90vw; height: 8px; background: rgba(255, 255, 255, 0.07); border: 1px solid var(--cyan-dim); overflow: hidden; margin-bottom: 20px; }
+    #boot-progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--blue), var(--cyan)); box-shadow: 0 0 12px var(--cyan); transition: width 0.15s linear; }
+
+    .cyber-btn {
+      font-family: var(--font-display);
+      font-size: 0.74rem;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      padding: 8px 14px;
+      background: rgba(0, 243, 255, 0.08);
+      color: var(--cyan);
+      border: 1px solid var(--cyan);
+      cursor: pointer;
+      clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+      transition: all 0.2s ease;
+      text-transform: uppercase;
+    }
+    .cyber-btn:hover { background: var(--cyan); color: #02060d; box-shadow: 0 0 18px rgba(0, 243, 255, 0.6); }
+    .cyber-btn.amber { color: var(--amber); border-color: var(--amber); background: rgba(255, 157, 0, 0.08); }
+    .cyber-btn.amber:hover, .cyber-btn.amber.active { background: var(--amber); color: #02060d; box-shadow: 0 0 18px rgba(255, 157, 0, 0.6); }
+    .cyber-btn.active { background: var(--cyan); color: #02060d; box-shadow: 0 0 18px rgba(0, 243, 255, 0.65); }
+    .cyber-btn.danger { color: #fff; border-color: var(--red); background: linear-gradient(135deg, rgba(255, 0, 85, 0.4), rgba(160, 0, 40, 0.7)); box-shadow: 0 0 15px rgba(255, 0, 85, 0.35); }
+    .cyber-btn.danger:hover, .cyber-btn.danger.active { background: var(--red); box-shadow: 0 0 28px var(--red); }
+
+    /* ===== HUD LAYOUT ===== */
+    .hud-wrapper { display: grid; grid-template-rows: 62px 1fr 68px; height: 100vh; width: 100vw; padding: 10px 14px; gap: 10px; }
+
+    .hud-header {
+      background: var(--bg-panel);
+      border: 1px solid var(--cyan-dim);
+      border-top: 2px solid var(--cyan);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      gap: 12px;
+      clip-path: polygon(0 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0 calc(100% - 10px));
+      box-shadow: 0 4px 25px rgba(0, 0, 0, 0.6);
+    }
+    .brand-block { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand-logo { width: 36px; height: 36px; flex-shrink: 0; border: 2px solid var(--cyan); display: grid; place-items: center; font-family: var(--font-display); font-weight: 900; color: var(--cyan); box-shadow: 0 0 12px var(--cyan-dim); }
+    .brand-title { font-family: var(--font-display); font-size: 0.95rem; font-weight: 900; letter-spacing: 2px; color: var(--text-main); text-shadow: 0 0 10px rgba(0, 243, 255, 0.4); white-space: nowrap; }
+    .brand-title .ar { font-family: var(--font-ar); letter-spacing: 0; margin-inline-start: 8px; color: var(--amber); }
+    .brand-sub { font-family: var(--font-mono); font-size: 0.66rem; color: var(--cyan); letter-spacing: 1px; white-space: nowrap; }
+
+    .header-telemetry { display: flex; align-items: center; gap: 14px; }
+    .stat-pill { display: flex; flex-direction: column; align-items: flex-start; border-left: 2px solid var(--cyan-dim); padding-left: 9px; }
+    .stat-label { font-size: 0.64rem; letter-spacing: 1px; color: var(--text-muted); text-transform: uppercase; white-space: nowrap; }
+    .stat-value { font-family: var(--font-mono); font-size: 0.86rem; color: var(--cyan); display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+
+    .pulse-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px var(--green); animation: pulseGlow 1.4s infinite; }
+    .pulse-dot.lost { background: var(--red); box-shadow: 0 0 10px var(--red); }
+    @keyframes pulseGlow { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.25); opacity: 0.55; } }
+
+    .batt-shell { width: 56px; height: 16px; border: 1px solid var(--cyan); padding: 2px; position: relative; display: flex; align-items: center; }
+    .batt-shell::after { content: ""; position: absolute; right: -5px; top: 4px; width: 3px; height: 6px; background: var(--cyan); }
+    #batt-fill { height: 100%; width: 92%; background: linear-gradient(90deg, var(--cyan), var(--green)); transition: width 0.3s ease, background 0.3s ease; }
+    .batt-low #batt-fill { background: var(--red); animation: blinkFast 0.5s infinite; }
+    @keyframes blinkFast { 50% { opacity: 0.25; } }
+
+    .header-actions { display: flex; align-items: center; gap: 8px; }
+    .host-input {
+      width: 138px;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--cyan);
+      background: rgba(2, 8, 18, 0.85);
+      border: 1px solid var(--cyan-dim);
+      border-bottom: 2px solid var(--cyan);
+      padding: 7px 8px;
+      outline: none;
+      user-select: text;
+    }
+    .host-input:focus { box-shadow: 0 0 12px rgba(0, 243, 255, 0.35); }
+
+    .hud-main { display: grid; grid-template-columns: 330px 1fr 480px; gap: 10px; min-height: 0; }
+
+    .panel { background: var(--bg-panel); border: 1px solid var(--cyan-dim); display: flex; flex-direction: column; min-height: 0; position: relative; overflow: hidden; box-shadow: inset 0 0 30px rgba(0, 243, 255, 0.03); }
+    .panel-header { padding: 8px 14px; background: rgba(0, 243, 255, 0.07); border-bottom: 1px solid var(--cyan-dim); display: flex; align-items: center; justify-content: space-between; font-family: var(--font-display); font-size: 0.74rem; letter-spacing: 2px; color: var(--cyan); }
+
+    .left-col { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+    .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 9px; }
+    .mode-grid .cyber-btn { padding: 7px 8px; font-size: 0.7rem; }
+    .span-2 { grid-column: span 2; }
+    .rps-btn { font-family: var(--font-ar) !important; font-size: 0.95rem !important; letter-spacing: 0 !important; }
+    .estop-btn { padding: 11px !important; font-size: 0.92rem !important; letter-spacing: 3px !important; }
+
+    .glove-telemetry-box { padding: 8px 12px; display: grid; grid-template-columns: 88px 1fr; gap: 12px; align-items: center; border-top: 1px solid var(--cyan-dim); }
+    #imu-horizon { width: 84px; height: 84px; border-radius: 50%; border: 1px solid var(--cyan); background: radial-gradient(circle, #092038 0%, #030912 100%); box-shadow: 0 0 12px rgba(0, 243, 255, 0.2); }
+    .imu-stats { display: flex; flex-direction: column; gap: 4px; font-family: var(--font-mono); font-size: 0.78rem; }
+    .imu-row { display: flex; justify-content: space-between; color: var(--text-muted); }
+    .imu-row strong { color: var(--text-main); }
+
+    /* RPS scoreboard */
+    .rps-score { border-top: 1px solid var(--cyan-dim); padding: 7px 12px 9px; }
+    .rps-score-title { font-family: var(--font-ar); font-weight: 700; font-size: 0.82rem; color: var(--amber); display: flex; justify-content: space-between; align-items: baseline; }
+    .rps-score-title small { font-family: var(--font-mono); font-size: 0.64rem; color: var(--text-muted); font-weight: 400; }
+    .score-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 5px; text-align: center; }
+    .score-cell { background: rgba(2, 8, 18, 0.6); border: 1px solid var(--cyan-dim); padding: 3px 0; }
+    .score-cell b { display: block; font-family: var(--font-display); font-size: 1.05rem; color: var(--text-main); }
+    .score-cell span { font-size: 0.6rem; letter-spacing: 1px; color: var(--text-muted); }
+    .score-cell.me b { color: var(--green); }
+    .score-cell.arm b { color: var(--red); }
+    .score-cell.draw b { color: var(--amber); }
+
+    .vision-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .vision-viewport { position: relative; flex: 1; background: #02050a; display: flex; align-items: center; justify-content: center; overflow: hidden; min-height: 0; }
+    #webcam-video { display: none; }
+    #vision-canvas { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+    .vision-overlay-badge { position: absolute; top: 8px; left: 8px; background: rgba(2, 8, 18, 0.82); border: 1px solid var(--cyan-dim); padding: 4px 8px; font-family: var(--font-mono); font-size: 0.7rem; color: var(--amber); pointer-events: none; max-width: calc(100% - 16px); }
+    .vision-crosshair { position: absolute; inset: 14px; border: 1px dashed rgba(0, 243, 255, 0.22); pointer-events: none; }
+
+    .joints-grid { flex: 1; display: grid; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(3, 1fr); gap: 8px; padding: 10px; min-height: 0; }
+    .joint-card { background: var(--bg-card); border: 1px solid rgba(0, 243, 255, 0.16); padding: 8px 10px; display: flex; flex-direction: column; justify-content: space-between; position: relative; transition: border-color 0.2s ease, box-shadow 0.2s ease; }
+    .joint-card:last-child:nth-child(odd) { grid-column: span 2; }   /* 5 joints: gripper card spans the last row */
+    .joint-card.active-dof { border-color: var(--cyan); box-shadow: inset 0 0 16px rgba(0, 243, 255, 0.12); }
+    .joint-card.limit-hit { border-color: var(--red); box-shadow: inset 0 0 22px rgba(255, 0, 85, 0.28); }
+    .joint-top { display: flex; justify-content: space-between; align-items: center; }
+    .joint-name { font-family: var(--font-display); font-size: 0.74rem; font-weight: 700; color: var(--cyan); letter-spacing: 1px; }
+    .joint-pin { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-muted); }
+    .limit-badge { font-family: var(--font-mono); font-size: 0.65rem; padding: 1px 6px; background: rgba(0, 255, 157, 0.12); color: var(--green); border: 1px solid var(--green); }
+    .joint-card.limit-hit .limit-badge { background: var(--red-dim); color: #fff; border-color: var(--red); animation: blinkFast 0.4s infinite; }
+    .joint-middle { display: flex; align-items: center; gap: 10px; margin: 4px 0; }
+
+    .dial-wrap { position: relative; width: 64px; height: 64px; flex-shrink: 0; }
+    .dial-svg { width: 64px; height: 64px; transform: rotate(135deg); }
+    .dial-bg { fill: none; stroke: rgba(255, 255, 255, 0.08); stroke-width: 6; stroke-dasharray: 126; stroke-dashoffset: 0; stroke-linecap: round; }
+    .dial-fg { fill: none; stroke: var(--cyan); stroke-width: 6; stroke-dasharray: 126; stroke-dashoffset: 63; stroke-linecap: round; filter: drop-shadow(0 0 5px var(--cyan)); transition: stroke-dashoffset 0.08s linear, stroke 0.2s ease; }
+    .joint-card.limit-hit .dial-fg { stroke: var(--red); filter: drop-shadow(0 0 6px var(--red)); }
+    .dial-text { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 0.88rem; color: var(--text-main); }
+    .dial-text small { font-size: 0.58rem; color: var(--text-muted); }
+    .wave-canvas { flex: 1; min-width: 0; height: 54px; background: rgba(2, 7, 15, 0.75); border: 1px solid rgba(0, 243, 255, 0.14); }
+
+    .joint-bottom { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-muted); }
+    .joint-slider { flex: 1; -webkit-appearance: none; appearance: none; height: 4px; background: rgba(0, 243, 255, 0.2); outline: none; cursor: pointer; }
+    .joint-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; background: var(--cyan); border: 1px solid #fff; box-shadow: 0 0 8px var(--cyan); cursor: pointer; }
+
+    .twin-viewport { flex: 1; position: relative; background: radial-gradient(circle at center, #08192e 0%, #02050a 100%); overflow: hidden; }
+    #twin-canvas-container { width: 100%; height: 100%; }
+    #twin-labels-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+    .node-label { position: absolute; transform: translate(-50%, -120%); background: rgba(3, 12, 24, 0.86); border: 1px solid var(--cyan); border-left: 3px solid var(--cyan); padding: 2px 7px; font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-main); white-space: nowrap; box-shadow: 0 0 10px rgba(0, 243, 255, 0.25); transition: border-color 0.15s ease; }
+    .node-label strong { color: var(--cyan); }
+    .node-label.limit { border-color: var(--red); color: #fff; background: rgba(60, 0, 20, 0.9); }
+    .node-label.limit strong { color: var(--amber); }
+
+    .twin-hud-overlay { position: absolute; bottom: 10px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: flex-end; pointer-events: none; font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted); }
+    .twin-controls-hint { background: rgba(3, 10, 20, 0.78); border: 1px solid var(--cyan-dim); padding: 5px 10px; }
+
+    /* ===== AL-HANASH AL-ALI GAME OVERLAY ===== */
+    .rps-overlay {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(92%, 420px);
+      background: rgba(3, 10, 22, 0.9);
+      border: 1px solid var(--amber);
+      border-top: 3px solid var(--amber);
+      box-shadow: 0 0 28px rgba(255, 157, 0, 0.28), inset 0 0 24px rgba(255, 157, 0, 0.06);
+      padding: 10px 14px 12px;
+      text-align: center;
+      pointer-events: none;
+      transition: opacity 0.35s ease, transform 0.35s ease;
+      z-index: 5;
+    }
+    .rps-overlay.hidden { opacity: 0; transform: translate(-50%, -14px); }
+    .rps-title-ar { font-family: var(--font-ar); font-weight: 900; font-size: 1.55rem; color: var(--amber); text-shadow: 0 0 14px rgba(255, 157, 0, 0.6); line-height: 1.2; }
+    .rps-title-en { font-family: var(--font-display); font-size: 0.6rem; letter-spacing: 3px; color: var(--text-muted); margin-bottom: 6px; }
+    .rps-phase { font-family: var(--font-display); font-size: 0.95rem; letter-spacing: 2px; color: var(--cyan); text-shadow: 0 0 10px var(--cyan); min-height: 1.3em; }
+    .rps-phase.shoot { color: var(--red); text-shadow: 0 0 14px var(--red); animation: blinkFast 0.35s 3; }
+    .rps-beats { display: flex; justify-content: center; gap: 10px; margin: 7px 0; }
+    .beat-dot { width: 13px; height: 13px; border-radius: 50%; border: 1px solid var(--cyan); background: transparent; transition: all 0.12s ease; }
+    .beat-dot.on { background: var(--amber); border-color: var(--amber); box-shadow: 0 0 12px var(--amber); }
+    .rps-versus { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; margin: 4px 0; }
+    .rps-side { background: rgba(2, 8, 18, 0.7); border: 1px solid var(--cyan-dim); padding: 4px 0 6px; }
+    .rps-side .icon { font-size: 2.1rem; line-height: 1.15; }
+    .rps-side .who { font-family: var(--font-mono); font-size: 0.64rem; letter-spacing: 1px; color: var(--text-muted); }
+    .rps-side .gname { font-family: var(--font-display); font-size: 0.66rem; letter-spacing: 1px; color: var(--text-main); }
+    .rps-vs { font-family: var(--font-display); font-weight: 900; color: var(--amber); }
+    .rps-result { font-family: var(--font-display); font-weight: 900; font-size: 1.05rem; letter-spacing: 2px; min-height: 1.4em; margin-top: 4px; }
+    .rps-result.win { color: var(--green); text-shadow: 0 0 14px var(--green); }
+    .rps-result.lose { color: var(--red); text-shadow: 0 0 14px var(--red); }
+    .rps-result.draw { color: var(--amber); text-shadow: 0 0 14px var(--amber); }
+    .rps-result.none { color: var(--text-muted); font-size: 0.8rem; }
+    .rps-hint { font-family: var(--font-mono); font-size: 0.64rem; color: var(--text-muted); margin-top: 4px; }
+
+    /* ===== FOOTER ===== */
+    .hud-footer { background: var(--bg-panel); border: 1px solid var(--cyan-dim); display: grid; grid-template-columns: 280px 1fr 300px; align-items: center; padding: 0 16px; gap: 16px; }
+    .haptic-monitor { display: flex; align-items: center; gap: 10px; border-right: 1px solid var(--cyan-dim); padding-right: 12px; }
+    .haptic-icon { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--amber); display: grid; place-items: center; color: var(--amber); font-family: var(--font-mono); font-size: 0.75rem; transition: transform 0.1s ease, box-shadow 0.1s ease; }
+    .haptic-icon.buzz { background: var(--amber); color: #000; box-shadow: 0 0 20px var(--amber); transform: scale(1.15); }
+    #serial-log { font-family: var(--font-mono); font-size: 0.78rem; color: var(--cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: rgba(0, 0, 0, 0.35); padding: 6px 12px; border-left: 2px solid var(--cyan); }
+    .footer-right { display: flex; justify-content: flex-end; gap: 8px; font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; }
+
+    @media (max-width: 1500px) { .brand-sub { display: none; } }
+    @media (max-width: 1380px) { .header-telemetry { gap: 9px; } .stat-label { font-size: 0.58rem; } .host-input { width: 112px; } }
+
+    /* ===== LINK / HOLD WARNING BANNER (3D twin) ===== */
+    .link-banner { position: absolute; left: 50%; bottom: 54px; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 6px 14px; display: none; z-index: 5; pointer-events: none; font-family: var(--font-mono); font-size: 0.74rem; letter-spacing: 1px; white-space: nowrap; border: 1px solid var(--cyan-dim); background: rgba(3, 10, 20, 0.88); color: var(--cyan); }
+    .link-banner.show { display: block; }
+    .link-banner.info  { color: var(--cyan); border-color: var(--cyan-dim); }
+    .link-banner.warn  { color: var(--amber); border-color: var(--amber); box-shadow: 0 0 14px var(--amber-dim); }
+    .link-banner.alert { color: #fff; border-color: var(--red); background: rgba(90, 0, 30, 0.9); box-shadow: 0 0 16px var(--red-dim); animation: bannerPulse 1s ease-in-out infinite; }
+    @keyframes bannerPulse { 50% { opacity: 0.65; } }
+  </style>
+</head>
+<body>
+
+  <!-- ===== BOOT OVERLAY ===== -->
+  <div id="boot-screen">
+    <div class="reactor-wrap">
+      <div class="reactor-ring ring-1"></div>
+      <div class="reactor-ring ring-2"></div>
+      <div class="reactor-ring ring-3"></div>
+      <div class="reactor-core" dir="rtl">الحنش<br>الآلي<small>5-DOF</small></div>
+    </div>
+    <div class="boot-title">GROUND CONTROL STATION // INITIALIZING</div>
+    <div class="boot-terminal" id="boot-log"></div>
+    <div class="boot-progress-bar"><div id="boot-progress-fill"></div></div>
+    <button class="cyber-btn" id="skip-boot-btn">SKIP BOOT SEQUENCE [ENTER]</button>
+  </div>
+
+  <!-- ===== MAIN HUD ===== -->
+  <div class="hud-wrapper">
+
+    <header class="hud-header">
+      <div class="brand-block">
+        <div class="brand-logo">R5</div>
+        <div>
+          <div class="brand-title">CYBERNETIC ARM // GCS v4.1<span class="ar" dir="rtl">الحنش الآلي</span></div>
+          <div class="brand-sub">GLOVE &lt;--ESP-NOW--&gt; ARM &lt;--WI-FI / WEBSOCKET :81--&gt; GCS</div>
+        </div>
+      </div>
+
+      <div class="header-telemetry">
+        <div class="stat-pill">
+          <span class="stat-label">ARM LINK</span>
+          <span class="stat-value"><span class="pulse-dot" id="link-dot"></span><span id="link-text">OFFLINE</span></span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-label">GLOVE RSSI</span>
+          <span class="stat-value" id="rssi-text">-48 dBm</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-label">SYSTEM MODE</span>
+          <span class="stat-value" id="mode-text" style="color: var(--amber);">MANUAL</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-label">ACTIVE DOF MAP</span>
+          <span class="stat-value" id="dof-text">BASE+SHOULDER</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-label">GLOVE BATTERY</span>
+          <span class="stat-value" id="batt-wrapper">
+            <div class="batt-shell"><div id="batt-fill"></div></div>
+            <span id="batt-text">92%</span>
+          </span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <input class="host-input" id="ws-host" type="text" value="192.168.4.1" spellcheck="false" autocomplete="off" title="Arm IP address or alhawnash.local" placeholder="arm IP / alhawnash.local" />
+        <button class="cyber-btn amber" id="ws-connect-btn" title="Open ws://&lt;arm&gt;:81/">CONNECT WI-FI</button>
+        <button class="cyber-btn" id="audio-toggle-btn">SFX: ON</button>
+      </div>
+    </header>
+
+    <main class="hud-main">
+
+      <!-- LEFT: MODES + GLOVE IMU + SCOREBOARD + CAMERA -->
+      <section class="left-col">
+        <div class="panel">
+          <div class="panel-header">
+            <span>TACTICAL MODE DECK</span>
+            <span id="rec-frames-badge">REC: 0 FRAMES</span>
+          </div>
+          <div class="mode-grid">
+            <button class="cyber-btn active" data-mode="MANUAL" onclick="sendModeCommand('MANUAL')">GLOVE MANUAL</button>
+            <button class="cyber-btn" data-mode="RECORD" onclick="sendModeCommand('RECORD')">RECORD MOTION</button>
+            <button class="cyber-btn" data-mode="PLAYBACK" onclick="sendModeCommand('PLAYBACK')">PLAYBACK</button>
+            <button class="cyber-btn" data-mode="HOMING" onclick="sendRawCommand('HOME')">RETURN HOME</button>
+            <button class="cyber-btn amber" data-mode="CAMERA_CV" id="cv-mode-btn" onclick="toggleCameraVisionMode()">AI CAMERA VISION</button>
+            <button class="cyber-btn" onclick="sendRawCommand('RESET')" title="Leave E-STOP and return HOME">RESET / CLEAR E-STOP</button>
+            <button class="cyber-btn amber span-2 rps-btn" data-mode="RPS_GAME" onclick="sendModeCommand('RPS_GAME')" dir="rtl">الحنش الآلي &nbsp;•&nbsp; حجر ورقة مقص</button>
+            <button class="cyber-btn danger estop-btn span-2" id="estop-btn" onclick="sendRawCommand('ESTOP')">!! EMERGENCY STOP (E-STOP) !!</button>
+          </div>
+
+          <div class="glove-telemetry-box">
+            <canvas id="imu-horizon" width="84" height="84"></canvas>
+            <div class="imu-stats">
+              <div class="imu-row"><span>MPU6050 PITCH:</span><strong id="imu-pitch">0.0°</strong></div>
+              <div class="imu-row"><span>MPU6050 ROLL:</span><strong id="imu-roll">0.0°</strong></div>
+              <div class="imu-row"><span>FLEX GRIPPER:</span><strong id="imu-grip">0%</strong></div>
+              <div class="imu-row"><span>ARM ADDRESS:</span><strong id="arm-addr" style="color:var(--amber)">OFFLINE</strong></div>
+            </div>
+          </div>
+
+          <div class="rps-score">
+            <div class="rps-score-title"><span dir="rtl">الحنش الآلي — النتيجة</span><small id="rps-last">NO ROUNDS YET</small></div>
+            <div class="score-row">
+              <div class="score-cell me"><b id="score-player">0</b><span>YOU</span></div>
+              <div class="score-cell draw"><b id="score-draw">0</b><span>DRAWS</span></div>
+              <div class="score-cell arm"><b id="score-arm">0</b><span>HANASH</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel vision-panel">
+          <div class="panel-header">
+            <span>AI MEDIAPIPE HAND TRACKING</span>
+            <button class="cyber-btn" style="padding:2px 8px; font-size:0.65rem;" id="cam-start-btn" onclick="toggleWebcam()">START CAM</button>
+          </div>
+          <div class="vision-viewport">
+            <video id="webcam-video" playsinline></video>
+            <canvas id="vision-canvas" width="480" height="320"></canvas>
+            <div class="vision-crosshair"></div>
+            <div class="vision-overlay-badge" id="vision-status">CAMERA STANDBY // CLICK 'START CAM'</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- CENTER: SERVO TELEMETRY -->
+      <section class="panel">
+        <div class="panel-header">
+          <span>5-DOF ACTUATOR TELEMETRY &amp; REAL-TIME WAVEFORMS</span>
+          <span style="font-family:var(--font-mono); font-size:0.7rem; color:var(--text-muted)">LEDC 50Hz // 14-BIT PWM</span>
+        </div>
+        <div class="joints-grid" id="joints-container"></div>
+      </section>
+
+      <!-- RIGHT: 3D TWIN + GAME OVERLAY -->
+      <section class="panel">
+        <div class="panel-header">
+          <span>3D KINEMATIC DIGITAL TWIN</span>
+          <button class="cyber-btn" style="padding:2px 8px; font-size:0.65rem;" onclick="resetCameraView()">RESET 3D VIEW</button>
+        </div>
+        <div class="twin-viewport">
+          <div id="twin-canvas-container"></div>
+          <div id="twin-labels-layer"></div>
+          <div class="link-banner" id="link-banner" role="status" aria-live="polite"></div>
+
+          <div class="rps-overlay hidden" id="rps-overlay">
+            <div class="rps-title-ar" dir="rtl">الحنش الآلي</div>
+            <div class="rps-title-en">AL-HANASH AL-ALI // ROCK · PAPER · SCISSORS</div>
+            <div class="rps-phase" id="rps-phase-text">STANDBY</div>
+            <div class="rps-beats"><span class="beat-dot" id="beat-0"></span><span class="beat-dot" id="beat-1"></span><span class="beat-dot" id="beat-2"></span></div>
+            <div class="rps-versus">
+              <div class="rps-side"><div class="icon" id="rps-player-icon">❔</div><div class="gname" id="rps-player-name">—</div><div class="who">YOU</div></div>
+              <div class="rps-vs">VS</div>
+              <div class="rps-side"><div class="icon" id="rps-arm-icon">❔</div><div class="gname" id="rps-arm-name">—</div><div class="who">AL-HANASH</div></div>
+            </div>
+            <div class="rps-result none" id="rps-result"></div>
+            <div class="rps-hint" id="rps-hint"></div>
+          </div>
+
+          <div class="twin-hud-overlay">
+            <div class="twin-controls-hint">LMB: ORBIT | SCROLL: ZOOM | RMB: PAN</div>
+            <div class="twin-controls-hint" id="end-effector-coords">TCP XYZ: [0.0, 18.4, 12.1] cm</div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="hud-footer">
+      <div class="haptic-monitor">
+        <div class="haptic-icon" id="haptic-indicator">VIB</div>
+        <div>
+          <div class="stat-label">DC1030 HAPTIC FEEDBACK</div>
+          <div style="font-family:var(--font-mono); font-size:0.82rem; color:var(--amber);" id="haptic-status-text">STANDBY (BC547 READY)</div>
+        </div>
+      </div>
+      <div id="serial-log">[SYSTEM] Ground Control Station ready. No arm link — the 3D twin holds its pose until real telemetry or camera data arrives. Enter the arm IP and press 'CONNECT WI-FI'.</div>
+      <div class="footer-right">
+        <span id="net-text">WS :81 OFFLINE</span>
+        <span>|</span>
+        <span id="fps-counter">60 FPS</span>
+      </div>
+    </footer>
+
+  </div>
+
+  <script>
+    // =========================================================================
+    // A. SERVO CONFIGURATION (matches config.h exactly)
+    // =========================================================================
+    // 5-DOF kinematic chain: BASE -> SHOULDER -> ELBOW -> WRIST PITCH -> GRIPPER  (wrist roll removed)
+    const SERVO_COUNT = 5;
+    const GRIPPER = 4;                // UI index of the gripper joint
+
+    const SERVO_SPECS = [
+      { id: 0, name: "BASE YAW",     short: "BASE",   pin: 13, min: 10, max: 170, home: 90, maxDps: 150, current: 90, target: 90, actual: 90 },
+      { id: 1, name: "SHOULDER",     short: "SHLDR",  pin: 16, min: 30, max: 150, home: 90, maxDps: 90,  current: 90, target: 90, actual: 90 },
+      { id: 2, name: "ELBOW PITCH",  short: "ELBOW",  pin: 17, min: 30, max: 150, home: 90, maxDps: 90,  current: 90, target: 90, actual: 90 },
+      { id: 3, name: "WRIST PITCH",  short: "W-PTCH", pin: 18, min: 20, max: 160, home: 90, maxDps: 180, current: 90, target: 90, actual: 90 },
+      { id: 4, name: "GRIPPER JAWS", short: "GRIP",   pin: 23, min: 40, max: 120, home: 50, maxDps: 200, current: 50, target: 50, actual: 50 }
+    ];
+
+    // Glove DOF selector -> servos it drives (the gripper always follows the flex sensor).
+    const DOF_SERVO_PAIRS = [[0, 1], [2], [3]];
+
+    // -------------------------------------------------------------------------
+    // Firmware wire mapping.  The dashboard is 5-DOF internally; this table translates
+    // between UI joint index and the arm firmware's servo index.
+    //   * Firmware still has the 6-servo config.h (WRIST_ROLL present, parked at 90 deg):
+    //         FW = { count: 6, map: [0, 1, 2, 3, 5], fixed: { 4: 90 } }      <- current setting
+    //   * Firmware rebuilt for 5 servos (SERVO_COUNT = 5, no WRIST_ROLL):
+    //         FW = { count: 5, map: [0, 1, 2, 3, 4], fixed: {} }
+    // -------------------------------------------------------------------------
+    const FW = { count: 6, map: [0, 1, 2, 3, 5], fixed: { 4: 90 } };
+
+    function toFwAngles(pose) {
+      const out = new Array(FW.count).fill(90);
+      Object.keys(FW.fixed).forEach(k => { out[Number(k)] = FW.fixed[k]; });
+      pose.forEach((a, i) => { out[FW.map[i]] = Number(a.toFixed(1)); });
+      return out;
+    }
+
+    // "Al-Hanash Al-Ali" game constants (match config.h)
+    const RPS_POSES = {
+      // order: BASE, SHOULDER, ELBOW, WRIST-PITCH, GRIPPER   (no wrist roll on this arm)
+      ready: [90, 82, 98, 90, 114],
+      up:    [90, 68, 80, 84, 114],
+      down:  [90, 90, 104, 96, 114],
+      1:     [90, 80, 96, 90, 116],   // ROCK:     fist, jaws closed
+      2:     [90, 80, 96, 76, 46],    // PAPER:    jaws wide open, palm tilted
+      3:     [90, 80, 96, 104, 80]    // SCISSORS: wrist tipped forward + jaws snip (roll replaced by pitch)
+    };
+    const RPS_T = { halfMs: 380, shakes: 3, readyTol: 2.5, readyTimeout: 4000, hold: 2400, returnTimeout: 5000, snipStart: 350, snipPeriod: 150, snipA: 66, snipB: 92 };
+    const RPS_NAMES = ['—', 'ROCK', 'PAPER', 'SCISSORS'];
+    const RPS_ICONS = ['❔', '✊', '✋', '✌️'];
+    const RPS_PHASE_NAMES = ['STANDBY', 'GETTING READY...', 'ROCK · PAPER · SCISSORS...', 'SHOOT!', 'RESETTING ARM...'];
+
+    // ---- Deterministic pose pipeline configuration -------------------------
+    const TELEMETRY_STALE_MS = 1000;  // no telemetry for this long  -> freeze twin + raise link warning
+    const CAMERA_STALE_MS    = 1000;  // no camera frame for this long -> freeze + raise warning
+    const POSE_EPS_DEG       = 0.02;  // joint change below this is "unchanged": no matrix, DOM or GPU work
+    const SNAP_DEG           = 0.05;  // closer than this to the source pose -> snap exactly (no asymptotic crawl)
+    const TELEMETRY_FOLLOW   = 18;    // 1/s, twin smoothing toward telemetry (display only)
+    const CV_TWIN_FOLLOW     = 30;    // 1/s, twin smoothing toward the camera pose
+    const CV_SMOOTH_ALPHA    = 0.45;  // EMA on raw MediaPipe angles
+    const CV_DEADBAND_DEG    = 1.0;   // hand tremor / landmark noise below this never moves a joint
+    const CV_GRIP_DEADBAND   = 1.0;   // deg (~1.7 % of grip travel); grip is already filtered by its own pipeline
+
+    // ---- Gripper (thumb-index distance) pipeline: mirrors the glove flex-sensor firmware chain ----
+    // 1) oversampling buffer  2) fault tolerance  3) EMA  4) map + clamp to 0..100 %
+    const GRIP_BUFFER_N      = 4;     // average of the last 4 valid frames
+    const GRIP_RATIO_MIN     = 0.02;  // plausible range of (thumb-index distance / palm size).
+    const GRIP_RATIO_MAX     = 2.00;  //   outside it = landmark glitch -> frame ignored
+    const GRIP_PALM_MIN      = 0.04;  // palm size (normalized image units) outside this = hand too far / too near / bad detection
+    const GRIP_PALM_MAX      = 0.60;
+    const GRIP_CAL_CLOSED    = 0.15;  // ratio when thumb & index touch  -> 100 % (closed)   [calibrate to your hand]
+    const GRIP_CAL_OPEN      = 1.00;  // ratio when fingers fully apart  ->   0 % (open)     [calibrate to your hand]
+    const GRIP_EMA_ALPHA     = 0.25;  // 0..1: lower = smoother / slower, higher = faster / noisier
+    const GRIP_ANGLE_OPEN    = 50;    // servo angle at 0 %   (matches SERVO_SPECS[GRIPPER])
+    const GRIP_ANGLE_CLOSED  = 110;   // servo angle at 100 %
+    const CV_MIN_SEND_MS     = 55;    // max ANGLES rate while the hand is moving (~18 Hz)
+    const CV_KEEPALIVE_MS    = 250;   // identical pose re-sent while holding, so the arm keeps its target
+
+    let state = {
+      wsConnected: false,
+      hasTelemetry: false,
+      telemetryStale: false,
+      lastTelemetryMs: 0,
+      sfxEnabled: true,
+      mode: "MANUAL",
+      linkAlive: true,
+      rssi: -46,
+      batteryPct: 92,
+      dofIndex: 0,
+      dofName: "BASE+SHOULDER",
+      limitsMask: 0,
+      pitch: 0.0,
+      roll: 0.0,
+      gripPct: 0,
+      recFrames: 0,
+      cameraActive: false,
+      armIp: '',
+      armAp: false
+    };
+
+    const WAVE_LEN = 80;
+    const waveHistory = SERVO_SPECS.map(s => Array(WAVE_LEN).fill(s.home));
+
+    // =========================================================================
+    // B. SCI-FI SOUND SYNTHESIZER (Web Audio API)
+    // =========================================================================
+    let audioCtx = null;
+    function ensureAudio() {
+      if (!audioCtx) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) audioCtx = new AudioContextClass();
+      }
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    function playSciFiBeep(freq = 880, duration = 0.06, type = 'sine', slideTo = null) {
+      if (!state.sfxEnabled) return;
+      try {
+        ensureAudio();
+        if (!audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, audioCtx.currentTime + duration);
+        gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch (e) { /* audio is optional */ }
+    }
+
+    let hapticTimer = null;
+    function triggerHapticUI(label, durationMs = 220) {
+      const icon = document.getElementById('haptic-indicator');
+      const txt = document.getElementById('haptic-status-text');
+      icon.classList.add('buzz');
+      txt.textContent = label;
+      playSciFiBeep(190, 0.09, 'sawtooth', 110);
+      if (hapticTimer) clearTimeout(hapticTimer);
+      hapticTimer = setTimeout(() => {
+        icon.classList.remove('buzz');
+        txt.textContent = 'STANDBY (BC547 READY)';
+        hapticTimer = null;
+      }, durationMs);
+    }
+
+    // =========================================================================
+    // C. STARTUP BOOT SEQUENCE
+    // =========================================================================
+    const BOOT_MESSAGES = [
+      "[KERNEL] Initializing Cybernetic Ground Control Station v4.1...",
+      "[ESP-NOW] Glove link: 50 Hz packets + 10 Hz arm heartbeat, auto channel lock... <span class='ok'>OK</span>",
+      "[GLOVE-C3] MPU6050 6-axis IMU complementary filter online (200Hz)... <span class='ok'>OK</span>",
+      "[HAPTICS] DC1030 coin motor state-machine (BC547 GPIO 5) armed... <span class='ok'>OK</span>",
+      "[POWER] TP4056 + 5V boost telemetry divider calibrated (GPIO 1 ADC1)... <span class='ok'>OK</span>",
+      "[ARM-WROOM] 5x LEDC 14-bit PWM channels (GPIOs 13,16,17,18,23)... <span class='ok'>OK</span>",
+      "[WI-FI] WebSocket bridge ws://&lt;arm-ip&gt;:81/ - no USB cable required... <span class='ok'>OK</span>",
+      "[WEBGL] Building Three.js 5-DOF forward kinematics Digital Twin... <span class='ok'>OK</span>",
+      "[GAME] Al-Hanash Al-Ali rock-paper-scissors engine... <span class='ok'>OK</span>",
+      "[VISION] Loading Google MediaPipe neural hand-landmark pipeline... <span class='warn'>READY</span>",
+      "[SYSTEM] All safety interlocks verified. Launching HUD..."
+    ];
+
+    // -------------------------------------------------------------------------
+    // Arabic voice greeting (native Web Speech API, no libraries / audio files)
+    //   * Sound design: rising sci-fi chime, then the robotic voice line.
+    //   * Autoplay policy: browsers block audio until the user interacts. If the boot
+    //     sequence is skipped (click / ENTER) the greeting plays immediately. If the boot
+    //     finishes on its own and the page has had no interaction yet, the greeting is
+    //     armed and plays on the very first click / key press / touch.
+    //   * "SFX: OFF" in the header mutes both the chime and the voice.
+    // -------------------------------------------------------------------------
+    const GREETING = {
+      text: 'أهلاً، أنا الحَنَشْ الآلِي',      // diacritics tune the pronunciation for Arabic TTS engines
+      langs: ['ar-SA', 'ar-EG'],                 // preferred locales, in order
+      pitch: 0.85,                               // slightly low = robotic
+      rate: 0.95,
+      volume: 1.0,
+      chimeLeadMs: 650                           // chime plays this long before the voice starts
+    };
+    const TTS_OK = ('speechSynthesis' in window) && (typeof SpeechSynthesisUtterance !== 'undefined');
+    let greetingDone = false;
+    let arabicVoice = null;
+
+    function pickArabicVoice() {
+      if (!TTS_OK) return null;
+      const voices = window.speechSynthesis.getVoices() || [];
+      const norm = (l) => String(l || '').replace('_', '-').toLowerCase();
+      for (const lang of GREETING.langs) {
+        const v = voices.find(x => norm(x.lang) === lang.toLowerCase());
+        if (v) return v;
+      }
+      return voices.find(x => norm(x.lang).startsWith('ar')) || null;
+    }
+
+    if (TTS_OK) {
+      arabicVoice = pickArabicVoice();
+      // Voices load asynchronously in Chromium: refresh the pick when the list arrives.
+      window.speechSynthesis.onvoiceschanged = () => { arabicVoice = pickArabicVoice(); };
+    }
+
+    function playInitChime() {
+      if (!state.sfxEnabled) return;
+      playSciFiBeep(440, 0.12, 'triangle', 660);
+      setTimeout(() => playSciFiBeep(660, 0.12, 'triangle', 990), 130);
+      setTimeout(() => playSciFiBeep(990, 0.30, 'sine', 1480), 260);
+    }
+
+    function speakGreeting() {
+      if (greetingDone) return;
+      greetingDone = true;
+      if (!state.sfxEnabled) return;
+      playInitChime();
+
+      if (!TTS_OK) { logSerial('[VOICE] Speech synthesis is not supported by this browser.'); return; }
+
+      setTimeout(() => {
+        try {
+          const synth = window.speechSynthesis;
+          synth.cancel();                                   // clear any stuck queue
+          const u = new SpeechSynthesisUtterance(GREETING.text);
+          const v = arabicVoice || pickArabicVoice();
+          if (v) { u.voice = v; u.lang = v.lang; }
+          else   { u.lang = GREETING.langs[0]; logSerial('[VOICE] No Arabic voice installed on this device - using the browser default.'); }
+          u.pitch = GREETING.pitch;
+          u.rate = GREETING.rate;
+          u.volume = GREETING.volume;
+          u.onerror = (e) => logSerial(`[VOICE] Speech error: ${e.error || 'unknown'}`);
+          window.__greetingUtterance = u;                   // keep a reference (Chromium may garbage-collect it mid-speech)
+          if (synth.paused) synth.resume();
+          synth.speak(u);
+        } catch (err) {
+          logSerial(`[VOICE] ${err.message}`);
+        }
+      }, GREETING.chimeLeadMs);
+    }
+
+    function armGreeting(fromUserGesture) {
+      if (greetingDone) return;
+      const activated = fromUserGesture || (navigator.userActivation && navigator.userActivation.hasBeenActive);
+      if (activated) { speakGreeting(); return; }
+      // Boot ended on its own with no interaction yet: wait for the first gesture.
+      ['pointerdown', 'keydown', 'touchstart'].forEach(ev =>
+        window.addEventListener(ev, speakGreeting, { once: true, capture: true }));
+    }
+
+    let bootDone = false;
+    function finishBoot(fromUserGesture) {
+      if (bootDone) return;
+      bootDone = true;
+      playSciFiBeep(520, 0.18, 'triangle', 1240);
+      document.getElementById('boot-screen').classList.add('hidden');
+      armGreeting(fromUserGesture === true);
+    }
+
+    function runBootSequence() {
+      const logBox = document.getElementById('boot-log');
+      const fill = document.getElementById('boot-progress-fill');
+      let step = 0;
+      const timer = setInterval(() => {
+        if (bootDone || step >= BOOT_MESSAGES.length) {
+          clearInterval(timer);
+          setTimeout(finishBoot, 350);
+          return;
+        }
+        const div = document.createElement('div');
+        div.className = 'boot-line';
+        div.innerHTML = `> ${BOOT_MESSAGES[step]}`;
+        logBox.appendChild(div);
+        logBox.scrollTop = logBox.scrollHeight;
+        playSciFiBeep(600 + step * 65, 0.035, 'sine');
+        step++;
+        fill.style.width = `${Math.round((step / BOOT_MESSAGES.length) * 100)}%`;
+      }, 220);
+    }
+
+    document.getElementById('skip-boot-btn').addEventListener('click', () => finishBoot(true));
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !bootDone) finishBoot(true);
+    });
+
+    // =========================================================================
+    // D. JOINT CARDS (SVG DIALS + WAVEFORMS + SLIDERS)
+    // =========================================================================
+    const waveCtxs = [];
+    function initJointCards() {
+      const container = document.getElementById('joints-container');
+      container.innerHTML = '';
+
+      SERVO_SPECS.forEach((s, idx) => {
+        const card = document.createElement('div');
+        card.className = 'joint-card';
+        card.id = `joint-card-${idx}`;
+        card.innerHTML = `
+          <div class="joint-top">
+            <div>
+              <div class="joint-name">${idx + 1}. ${s.name}</div>
+              <div class="joint-pin">GPIO ${s.pin} // LIM [${s.min}°..${s.max}°]</div>
+            </div>
+            <span class="limit-badge" id="limit-badge-${idx}">NOMINAL</span>
+          </div>
+          <div class="joint-middle">
+            <div class="dial-wrap">
+              <svg class="dial-svg" viewBox="0 0 60 60">
+                <circle class="dial-bg" cx="30" cy="30" r="24"></circle>
+                <circle class="dial-fg" id="dial-fg-${idx}" cx="30" cy="30" r="24"></circle>
+              </svg>
+              <div class="dial-text">
+                <span id="angle-val-${idx}">${s.current.toFixed(0)}°</span>
+                <small id="target-val-${idx}">T:${s.target.toFixed(0)}°</small>
+              </div>
+            </div>
+            <canvas class="wave-canvas" id="wave-canvas-${idx}" width="180" height="54"></canvas>
+          </div>
+          <div class="joint-bottom">
+            <span>${s.min}°</span>
+            <input type="range" class="joint-slider" id="slider-${idx}" min="${s.min}" max="${s.max}" step="0.5" value="${s.home}" />
+            <span>${s.max}°</span>
+          </div>
+        `;
+        container.appendChild(card);
+
+        waveCtxs.push(document.getElementById(`wave-canvas-${idx}`).getContext('2d'));
+
+        const slider = document.getElementById(`slider-${idx}`);
+        slider.addEventListener('input', (e) => {
+          const val = parseFloat(e.target.value);
+          SERVO_SPECS[idx].target = val;
+          sendServoOverride(idx, val, false);
+        });
+        slider.addEventListener('change', (e) => {
+          sendServoOverride(idx, parseFloat(e.target.value), true);   // final value is never throttled away
+        });
+      });
+    }
+
+    function isAtLimit(i) {
+      const s = SERVO_SPECS[i];
+      return ((state.limitsMask & (1 << FW.map[i])) !== 0) || (s.current <= s.min + 0.5) || (s.current >= s.max - 0.5);
+    }
+
+    // Skip identical DOM writes (a held pose must cost nothing and never flicker)
+    const _txt = new WeakMap();
+    function setText(el, str) {
+      if (_txt.get(el) === str) return;
+      _txt.set(el, str);
+      el.textContent = str;
+    }
+
+    const _dialCache = [];
+    const _sliderCache = [];
+    let _lastJointRenderMs = 0;
+
+    function renderJointTelemetry(now) {
+      if (now - _lastJointRenderMs < 33) return;   // ~30 Hz is plenty for dials and scope traces
+      _lastJointRenderMs = now;
+
+      const activeServos = DOF_SERVO_PAIRS[state.dofIndex] || [];
+
+      SERVO_SPECS.forEach((s, i) => {
+        const card = document.getElementById(`joint-card-${i}`);
+        const badge = document.getElementById(`limit-badge-${i}`);
+        const dialFg = document.getElementById(`dial-fg-${i}`);
+        const angTxt = document.getElementById(`angle-val-${i}`);
+        const tgtTxt = document.getElementById(`target-val-${i}`);
+        const slider = document.getElementById(`slider-${i}`);
+
+        const atLimit = isAtLimit(i);
+        card.classList.toggle('active-dof', activeServos.includes(i) || i === GRIPPER);
+        card.classList.toggle('limit-hit', atLimit);
+        setText(badge, atLimit ? 'LIMIT HIT!' : 'NOMINAL');
+
+        setText(angTxt, `${s.current.toFixed(0)}°`);
+        setText(tgtTxt, `T:${s.target.toFixed(0)}°`);
+        if (document.activeElement !== slider && _sliderCache[i] !== s.target) {
+          slider.value = s.target;
+          _sliderCache[i] = s.target;
+        }
+
+        const norm = Math.max(0, Math.min(1, (s.current - s.min) / (s.max - s.min)));
+        const dash = (126 - norm * 112).toFixed(2);
+        if (_dialCache[i] !== dash) { dialFg.style.strokeDashoffset = dash; _dialCache[i] = dash; }
+
+        waveHistory[i].push(s.current);
+        if (waveHistory[i].length > WAVE_LEN) waveHistory[i].shift();
+
+        const ctx = waveCtxs[i];
+        const w = ctx.canvas.width;
+        const h = ctx.canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.strokeStyle = 'rgba(0, 243, 255, 0.12)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, h / 2);
+        ctx.lineTo(w, h / 2);
+        ctx.stroke();
+
+        ctx.strokeStyle = atLimit ? '#ff0055' : '#00f3ff';
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        for (let k = 0; k < waveHistory[i].length; k++) {
+          const x = (k / (WAVE_LEN - 1)) * w;
+          const yn = (waveHistory[i][k] - s.min) / (s.max - s.min);
+          const y = h - 5 - yn * (h - 10);
+          if (k === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      });
+    }
+
+    let _imuSig = '';
+    function renderImuHorizon() {
+      const sig = `${state.pitch.toFixed(1)}|${state.roll.toFixed(1)}|${state.gripPct}`;
+      if (sig === _imuSig) return;                  // glove not moving -> nothing to redraw
+      _imuSig = sig;
+
+      const canvas = document.getElementById('imu-horizon');
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      const cx = w / 2, cy = h / 2;
+
+      ctx.clearRect(0, 0, w, h);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, cx - 2, 0, Math.PI * 2);
+      ctx.clip();
+
+      const rollRad = (state.roll * Math.PI) / 180;
+      const pitchShift = (state.pitch / 45) * (h * 0.4);
+
+      ctx.translate(cx, cy);
+      ctx.rotate(rollRad);
+      ctx.fillStyle = 'rgba(0, 243, 255, 0.16)';
+      ctx.fillRect(-w, pitchShift, w * 2, h * 2);
+      ctx.strokeStyle = '#00f3ff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-w, pitchShift);
+      ctx.lineTo(w, pitchShift);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.strokeStyle = '#ff9d00';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(cx - 12, cy); ctx.lineTo(cx + 12, cy);
+      ctx.moveTo(cx, cy - 8);  ctx.lineTo(cx, cy + 8);
+      ctx.stroke();
+
+      setText(document.getElementById('imu-pitch'), `${state.pitch.toFixed(1)}°`);
+      setText(document.getElementById('imu-roll'), `${state.roll.toFixed(1)}°`);
+      setText(document.getElementById('imu-grip'), `${state.gripPct}%`);
+    }
+
+    // =========================================================================
+    // E. THREE.JS 3D KINEMATIC DIGITAL TWIN
+    // =========================================================================
+    let scene, camera, renderer;
+    let pivots = {};
+    let jointNodes = [];
+    let jawLeft, jawRight;
+    let labelEls = [];
+    let labelValEls = [];
+
+    let camSpherical = { radius: 26, theta: Math.PI * 0.28, phi: Math.PI * 0.34, targetY: 7.5 };
+
+    function init3DDigitalTwin() {
+      const container = document.getElementById('twin-canvas-container');
+      const labelsLayer = document.getElementById('twin-labels-layer');
+
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(42, container.clientWidth / container.clientHeight, 0.1, 200);
+      updateCameraOrbit();
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      container.appendChild(renderer.domElement);
+
+      scene.add(new THREE.AmbientLight(0x88ccff, 0.75));
+      const dirLight1 = new THREE.DirectionalLight(0x00f3ff, 1.2);
+      dirLight1.position.set(18, 28, 20);
+      scene.add(dirLight1);
+      const dirLight2 = new THREE.DirectionalLight(0xff9d00, 0.65);
+      dirLight2.position.set(-18, 12, -15);
+      scene.add(dirLight2);
+
+      const grid = new THREE.GridHelper(32, 32, 0x00f3ff, 0x0a2846);
+      scene.add(grid);
+
+      const ringGeo = new THREE.RingGeometry(3.6, 3.85, 48);
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0x00f3ff, side: THREE.DoubleSide, transparent: true, opacity: 0.55 });
+      const floorRing = new THREE.Mesh(ringGeo, ringMat);
+      floorRing.rotation.x = -Math.PI / 2;
+      floorRing.position.y = 0.02;
+      scene.add(floorRing);
+
+      const armorMat = new THREE.MeshStandardMaterial({ color: 0x0b1e36, metalness: 0.75, roughness: 0.28 });
+      const darkJointMat = new THREE.MeshStandardMaterial({ color: 0x162436, metalness: 0.8, roughness: 0.35 });
+      const wireMat = new THREE.MeshBasicMaterial({ color: 0x00f3ff, wireframe: true, transparent: true, opacity: 0.25 });
+
+      function addCyberLinkMesh(parent, geo, yOffset) {
+        const group = new THREE.Group();
+        const solid = new THREE.Mesh(geo, armorMat);
+        const wire = new THREE.Mesh(geo, wireMat);
+        solid.position.y = yOffset;
+        wire.position.y = yOffset;
+        group.add(solid);
+        group.add(wire);
+        parent.add(group);
+        return group;
+      }
+
+      function createGlowingJointNode(parent) {
+        const nodeMat = new THREE.MeshBasicMaterial({ color: 0x00f3ff });
+        const nodeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.85, 1.7, 20), nodeMat);
+        nodeMesh.rotation.z = Math.PI / 2;
+        parent.add(nodeMesh);
+        jointNodes.push(nodeMesh);
+        return nodeMesh;
+      }
+
+      const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 3.1, 1.2, 24), darkJointMat);
+      pedestal.position.y = 0.6;
+      scene.add(pedestal);
+
+      pivots.base = new THREE.Group();
+      pivots.base.position.set(0, 1.2, 0);
+      scene.add(pivots.base);
+      addCyberLinkMesh(pivots.base, new THREE.CylinderGeometry(2.1, 2.4, 1.6, 20), 0.8);
+      const baseNode = new THREE.Mesh(new THREE.TorusGeometry(2.25, 0.12, 12, 36), new THREE.MeshBasicMaterial({ color: 0x00f3ff }));
+      baseNode.rotation.x = Math.PI / 2;
+      baseNode.position.y = 0.2;
+      pivots.base.add(baseNode);
+      jointNodes.push(baseNode);
+
+      pivots.shoulder = new THREE.Group();
+      pivots.shoulder.position.set(0, 2.0, 0);
+      pivots.base.add(pivots.shoulder);
+      createGlowingJointNode(pivots.shoulder);
+      addCyberLinkMesh(pivots.shoulder, new THREE.BoxGeometry(1.3, 6.2, 1.3), 3.1);
+
+      pivots.elbow = new THREE.Group();
+      pivots.elbow.position.set(0, 6.2, 0);
+      pivots.shoulder.add(pivots.elbow);
+      createGlowingJointNode(pivots.elbow);
+      addCyberLinkMesh(pivots.elbow, new THREE.BoxGeometry(1.05, 5.0, 1.05), 2.5);
+
+      pivots.wristPitch = new THREE.Group();
+      pivots.wristPitch.position.set(0, 5.0, 0);
+      pivots.elbow.add(pivots.wristPitch);
+      createGlowingJointNode(pivots.wristPitch);
+      addCyberLinkMesh(pivots.wristPitch, new THREE.BoxGeometry(0.85, 1.6, 0.85), 0.8);
+
+      // Fixed (non-articulated) wrist collar: decorative, keeps the original silhouette without a roll joint.
+      const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.75, 0.5, 18), darkJointMat);
+      collar.position.set(0, 1.7, 0);
+      pivots.wristPitch.add(collar);
+
+      pivots.gripper = new THREE.Group();
+      pivots.gripper.position.set(0, 2.2, 0);
+      pivots.wristPitch.add(pivots.gripper);
+      const gripNode = new THREE.Mesh(new THREE.SphereGeometry(0.52, 16, 16), new THREE.MeshBasicMaterial({ color: 0xff9d00 }));
+      pivots.gripper.add(gripNode);
+      jointNodes.push(gripNode);
+
+      const palmBar = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.35, 0.7), darkJointMat);
+      palmBar.position.y = 0.25;
+      pivots.gripper.add(palmBar);
+
+      const jawGeo = new THREE.BoxGeometry(0.24, 1.85, 0.45);
+      jawLeft = new THREE.Mesh(jawGeo, new THREE.MeshStandardMaterial({ color: 0x00f3ff, emissive: 0x003344 }));
+      jawRight = new THREE.Mesh(jawGeo, new THREE.MeshStandardMaterial({ color: 0x00f3ff, emissive: 0x003344 }));
+      jawLeft.position.set(-0.6, 1.2, 0);
+      jawRight.position.set(0.6, 1.2, 0);
+      pivots.gripper.add(jawLeft);
+      pivots.gripper.add(jawRight);
+
+      labelsLayer.innerHTML = '';
+      SERVO_SPECS.forEach((s, i) => {
+        const tag = document.createElement('div');
+        tag.className = 'node-label';
+        tag.id = `node-label-${i}`;
+        tag.innerHTML = `<strong>${s.short}</strong> <span>${s.home}°</span>`;
+        labelsLayer.appendChild(tag);
+        labelEls.push(tag);
+        labelValEls.push(tag.querySelector('span'));
+      });
+
+      // Bake every transform that never changes after construction. Only the five
+      // articulated pivots and the two jaws keep matrixAutoUpdate, so a pose update
+      // recomputes 7 local matrices instead of the whole scene graph.
+      const animated = new Set([pivots.base, pivots.shoulder, pivots.elbow, pivots.wristPitch, jawLeft, jawRight]);
+      scene.traverse((o) => {
+        if (animated.has(o)) return;
+        o.updateMatrix();
+        o.matrixAutoUpdate = false;
+      });
+
+      let isDragging = false;
+      let isRightDrag = false;
+      let prevMouse = { x: 0, y: 0 };
+
+      renderer.domElement.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        isRightDrag = (e.button === 2);
+        prevMouse = { x: e.clientX, y: e.clientY };
+      });
+      renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+      window.addEventListener('mouseup', () => { isDragging = false; });
+      window.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - prevMouse.x;
+        const dy = e.clientY - prevMouse.y;
+        prevMouse = { x: e.clientX, y: e.clientY };
+        if (isRightDrag) {
+          camSpherical.targetY = Math.max(2, Math.min(16, camSpherical.targetY + dy * 0.03));
+        } else {
+          camSpherical.theta -= dx * 0.008;
+          camSpherical.phi = Math.max(0.15, Math.min(Math.PI * 0.48, camSpherical.phi - dy * 0.008));
+        }
+        updateCameraOrbit();
+      });
+      renderer.domElement.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        camSpherical.radius = Math.max(12, Math.min(45, camSpherical.radius + e.deltaY * 0.015));
+        updateCameraOrbit();
+      }, { passive: false });
+
+      window.addEventListener('resize', () => {
+        if (!container.clientWidth || !container.clientHeight) return;
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        markSceneDirty();
+      });
+    }
+
+    function updateCameraOrbit() {
+      if (!camera) return;
+      const x = camSpherical.radius * Math.sin(camSpherical.phi) * Math.sin(camSpherical.theta);
+      const y = camSpherical.targetY + camSpherical.radius * Math.cos(camSpherical.phi);
+      const z = camSpherical.radius * Math.sin(camSpherical.phi) * Math.cos(camSpherical.theta);
+      camera.position.set(x, y, z);
+      camera.lookAt(0, camSpherical.targetY, 0);
+      markSceneDirty();
+    }
+
+    function resetCameraView() {
+      camSpherical = { radius: 26, theta: Math.PI * 0.28, phi: Math.PI * 0.34, targetY: 7.5 };
+      updateCameraOrbit();
+      playSciFiBeep(960, 0.05);
+    }
+
+    // -------------------------------------------------------------------------
+    // Pose -> scene graph. Runs every frame but is a no-op unless a joint moved
+    // (> POSE_EPS_DEG), a limit flag flipped, or the view changed. A held pose
+    // therefore performs zero matrix updates, zero DOM writes and zero GPU work.
+    // -------------------------------------------------------------------------
+    const DEG2RAD = Math.PI / 180;
+    const _poseApplied = new Float64Array(SERVO_COUNT).fill(-9999);
+    let _limitSigApplied = -1;
+    let _sceneDirty = true;
+    let _tmpVec = null;
+    let _tcpText = '';
+
+    function markSceneDirty() { _sceneDirty = true; }
+
+    function update3DKinematics() {
+      if (!scene || !pivots.base) return;
+
+      let poseChanged = false;
+      let limitSig = 0;
+      for (let i = 0; i < SERVO_COUNT; i++) {
+        if (Math.abs(SERVO_SPECS[i].current - _poseApplied[i]) > POSE_EPS_DEG) poseChanged = true;
+        if (isAtLimit(i)) limitSig |= (1 << i);
+      }
+      if (!poseChanged && limitSig === _limitSigApplied && !_sceneDirty) return;
+
+      for (let i = 0; i < SERVO_COUNT; i++) _poseApplied[i] = SERVO_SPECS[i].current;
+      _limitSigApplied = limitSig;
+      _sceneDirty = false;
+
+      const a = _poseApplied;
+      pivots.base.rotation.y       = (a[0] - 90) * DEG2RAD;
+      pivots.shoulder.rotation.z   = -(a[1] - 90) * DEG2RAD * 0.85;
+      pivots.elbow.rotation.z      = -(a[2] - 90) * DEG2RAD * 0.95;
+      pivots.wristPitch.rotation.z = -(a[3] - 90) * DEG2RAD;
+
+      // Gripper jaws (50 deg = open, 110 deg = closed)
+      const gripNorm = Math.max(0, Math.min(1, (a[GRIPPER] - 50) / (110 - 50)));
+      const spread = 0.72 - gripNorm * 0.54;
+      jawLeft.position.x = -spread;
+      jawRight.position.x = spread;
+
+      // One forced world-matrix pass, then everything below reads matrixWorld directly.
+      scene.updateMatrixWorld(true);
+      camera.updateMatrixWorld();          // keeps label projection in step with the orbit camera
+
+      const pivotList = [pivots.base, pivots.shoulder, pivots.elbow, pivots.wristPitch, pivots.gripper];
+      const w = renderer.domElement.clientWidth;
+      const h = renderer.domElement.clientHeight;
+      if (!_tmpVec) _tmpVec = new THREE.Vector3();
+
+      pivotList.forEach((grp, idx) => {
+        const s = SERVO_SPECS[idx];
+        const atLimit = (limitSig & (1 << idx)) !== 0;
+
+        if (jointNodes[idx]) jointNodes[idx].material.color.setHex(atLimit ? 0xff0055 : (idx === GRIPPER ? 0xff9d00 : 0x00f3ff));
+
+        const worldPos = _tmpVec.setFromMatrixPosition(grp.matrixWorld);
+
+        if (idx === GRIPPER) {
+          const tcp = `TCP XYZ: [${(worldPos.x * 1.5).toFixed(1)}, ${(worldPos.y * 1.5).toFixed(1)}, ${(worldPos.z * 1.5).toFixed(1)}] cm`;
+          if (tcp !== _tcpText) { _tcpText = tcp; document.getElementById('end-effector-coords').textContent = tcp; }
+        }
+
+        worldPos.project(camera);
+        const el = labelEls[idx];
+        if (el) {
+          el.style.left = `${(worldPos.x * 0.5 + 0.5) * w}px`;
+          el.style.top = `${(-worldPos.y * 0.5 + 0.5) * h}px`;
+          el.classList.toggle('limit', atLimit);
+          setText(labelValEls[idx], `${s.current.toFixed(0)}°`);
+        }
+      });
+
+      renderer.render(scene, camera);
+    }
+
+    // =========================================================================
+    // F. WI-FI WEBSOCKET BRIDGE  (ws://<arm-ip>:81/, JSON both ways, no USB)
+    // =========================================================================
+    let ws = null;
+    let wsWanted = false;
+    let wsPingTimer = null;
+    let wsReconnectTimer = null;
+
+    function currentHost() {
+      return document.getElementById('ws-host').value.trim()
+        .replace(/^wss?:\/\//i, '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
+    }
+
+    function setWsButton(text, active) {
+      const btn = document.getElementById('ws-connect-btn');
+      btn.textContent = text;
+      btn.classList.toggle('active', !!active);
+    }
+
+    function toggleWsConnection() {
+      if (wsWanted || ws) {
+        wsWanted = false;
+        closeWs();
+        logSerial('[WS] Disconnected from arm.');
+        return;
+      }
+      wsWanted = true;
+      openWs();
+    }
+
+    function closeWs() {
+      if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+      if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = null; }
+      if (ws) {
+        const sock = ws;
+        ws = null;
+        sock.onopen = sock.onclose = sock.onerror = sock.onmessage = null;
+        try { sock.close(); } catch (e) { /* already closed */ }
+      }
+      state.wsConnected = false;
+      state.telemetryStale = false;
+      state.hasTelemetry = false;
+      holdPoseNow();
+      state.armIp = '';
+      setWsButton('CONNECT WI-FI', false);
+      document.getElementById('arm-addr').textContent = 'OFFLINE';
+      document.getElementById('arm-addr').style.color = 'var(--amber)';
+      document.getElementById('net-text').textContent = 'WS :81 OFFLINE';
+      updateHeaderIndicators();
+    }
+
+    function openWs() {
+      const host = currentHost();
+      if (!host) {
+        logSerial('[WS] Enter the arm IP address (e.g. 192.168.4.1 or alhawnash.local).');
+        wsWanted = false;
+        return;
+      }
+      try { localStorage.setItem('alhawnash.host', host); } catch (e) { /* storage optional */ }
+
+      setWsButton('CONNECTING... (CLICK TO CANCEL)', false);
+      logSerial(`[WS] Connecting to ws://${host}:81/ ...`);
+      let sock;
+      try {
+        sock = new WebSocket(`ws://${host}:81/`);
+      } catch (err) {
+        logSerial(`[WS ERROR] ${err.message}`);
+        wsWanted = false;
+        setWsButton('CONNECT WI-FI', false);
+        return;
+      }
+      ws = sock;
+
+      sock.onopen = () => {
+        state.wsConnected = true;
+        state.hasTelemetry = false;      // never invent a pose: wait for the first real packet
+        state.telemetryStale = false;
+        state.lastTelemetryMs = performance.now();
+        setWsButton('WI-FI LINKED (CLICK TO DISCONNECT)', true);
+        document.getElementById('arm-addr').textContent = host;
+        document.getElementById('arm-addr').style.color = 'var(--green)';
+        document.getElementById('net-text').textContent = `WS ${host}:81`;
+        playSciFiBeep(1040, 0.12, 'sine', 1560);
+        logSerial(`[WS] Connected to arm at ws://${host}:81/`);
+        sendJsonToArm({ cmd: 'PING' });
+        if (wsPingTimer) clearInterval(wsPingTimer);
+        wsPingTimer = setInterval(() => sendJsonToArm({ cmd: 'PING' }), 500);
+        updateHeaderIndicators();
+      };
+
+      sock.onmessage = (ev) => {
+        if (typeof ev.data === 'string') processIncomingLine(ev.data);
+      };
+
+      sock.onerror = () => {
+        logSerial('[WS ERROR] Cannot reach the arm. Same Wi-Fi? Correct IP? (https pages cannot open ws://)');
+      };
+
+      sock.onclose = () => {
+        if (ws !== sock) return;
+        ws = null;
+        if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = null; }
+        state.wsConnected = false;
+        state.telemetryStale = false;
+        state.hasTelemetry = false;
+        holdPoseNow();                   // link dropped: freeze exactly where the twin is
+        document.getElementById('arm-addr').textContent = 'OFFLINE';
+        document.getElementById('arm-addr').style.color = 'var(--amber)';
+        document.getElementById('net-text').textContent = 'WS :81 OFFLINE';
+        updateHeaderIndicators();
+        if (wsWanted) {
+          setWsButton('RECONNECTING... (CLICK TO CANCEL)', false);
+          logSerial('[WS] Link lost - retrying in 2 s...');
+          wsReconnectTimer = setTimeout(() => { wsReconnectTimer = null; if (wsWanted) openWs(); }, 2000);
+        } else {
+          setWsButton('CONNECT WI-FI', false);
+        }
+      };
+    }
+
+    function sendJsonToArm(obj) {
+      if (ws && ws.readyState === 1) {
+        try { ws.send(JSON.stringify(obj)); } catch (e) { /* socket closing */ }
+      }
+    }
+
+    function processIncomingLine(line) {
+      let data;
+      try { data = JSON.parse(line); } catch (e) { return; }
+
+      if (data.type === 'log') {
+        logSerial(String(data.msg || ''));
+        if (String(data.msg || '').includes('EMERGENCY')) triggerHapticUI('HEAVY E-STOP BUZZ (1.2s)', 1200);
+        return;
+      }
+      if (data.type !== 'telemetry') return;
+
+      const prevLimits = state.limitsMask;
+      state.lastTelemetryMs = performance.now();
+      state.telemetryStale = false;
+      state.hasTelemetry = true;
+      state.mode = data.mode || state.mode;
+      state.linkAlive = Boolean(data.link);
+      state.rssi = (typeof data.rssi === 'number') ? data.rssi : -100;
+      state.batteryPct = (typeof data.batt === 'number') ? data.batt : 100;
+      state.dofIndex = data.dof || 0;
+      state.dofName = data.dofName || "BASE+SHOULDER";
+      state.limitsMask = data.limits || 0;
+      state.pitch = data.pitch || 0;
+      state.roll = data.roll || 0;
+      state.gripPct = data.grip || 0;
+      state.recFrames = data.recFrames || 0;
+      state.armIp = data.ip || '';
+      state.armAp = Boolean(data.ap);
+
+      // Only finite numbers are accepted, clamped to the servo's mechanical limits.
+      if (Array.isArray(data.angles))  SERVO_SPECS.forEach((s, i) => { const a = data.angles[FW.map[i]];  if (Number.isFinite(a)) s.actual = clampServo(i, a); });
+      if (Array.isArray(data.targets)) SERVO_SPECS.forEach((s, i) => { const v = data.targets[FW.map[i]]; if (Number.isFinite(v)) s.target = clampServo(i, v); });
+
+      if ((state.limitsMask & ~prevLimits) !== 0 && state.mode !== 'RPS_GAME') triggerHapticUI('LIMIT RUMBLE SENT TO GLOVE!', 380);
+
+      handleRpsTelemetry(data.rpsPhase | 0, data.rpsBeat | 0, data.rpsGesture | 0, data.rpsRound | 0);
+      updateHeaderIndicators();
+    }
+
+    function sendModeCommand(modeStr) {
+      playSciFiBeep(780, 0.06);
+
+      if (modeStr === 'RPS_GAME') {
+        if (state.mode === 'ESTOP') { logSerial('[RPS] Refused - E-STOP active. Press RESET first.'); return; }
+        if (!state.wsConnected) simStartRps(performance.now());
+        sendJsonToArm({ cmd: 'RPS_START' });
+        logSerial('[CMD] الحنش الآلي — RPS game started.');
+        return;
+      }
+
+      if (!state.wsConnected) {
+        if (state.mode === 'ESTOP') { logSerial('[CMD] Mode change refused - E-STOP active. Press RESET.'); return; }
+        if (state.mode === 'RPS_GAME') rpsAbortLocal();
+        state.mode = modeStr;
+        triggerHapticUI(`MODE -> ${modeStr} (PULSE)`, 200);
+        updateHeaderIndicators();
+      }
+      sendJsonToArm({ cmd: 'MODE', val: modeStr });
+      logSerial(`[CMD] Sent Mode Switch -> ${modeStr}`);
+    }
+
+    function sendRawCommand(cmdStr) {
+      if (cmdStr === 'ESTOP') {
+        state.mode = 'ESTOP';
+        if (!state.wsConnected) rpsAbortLocal();
+        triggerHapticUI('E-STOP HEAVY BUZZ (1.2s)', 1200);
+        playSciFiBeep(220, 0.35, 'sawtooth', 95);
+      } else if (cmdStr === 'RESET') {
+        triggerHapticUI('RESET DOUBLE RUMBLE', 350);
+        if (!state.wsConnected) { rpsAbortLocal(); state.mode = 'HOMING'; }
+      } else if (cmdStr === 'HOME') {
+        if (!state.wsConnected) {
+          if (state.mode === 'ESTOP') { logSerial('[CMD] HOME refused - E-STOP active. Press RESET.'); return; }
+          rpsAbortLocal();
+          state.mode = 'HOMING';
+        }
+        triggerHapticUI('HOMING PULSE', 220);
+      }
+      updateHeaderIndicators();
+      sendJsonToArm({ cmd: cmdStr });
+      logSerial(`[CMD] Dispatched ${cmdStr} command to Arm Controller.`);
+    }
+
+    let lastServoSendMs = 0;
+    function sendServoOverride(id, angle, force) {
+      const now = performance.now();
+      if (!force && now - lastServoSendMs < 35) return;
+      lastServoSendMs = now;
+      sendJsonToArm({ cmd: "SERVO", id: FW.map[id], angle: Number(angle.toFixed(1)) });
+    }
+
+    function logSerial(msg) {
+      document.getElementById('serial-log').textContent = msg;
+    }
+
+    function updateHeaderIndicators() {
+      const dot = document.getElementById('link-dot');
+      const linkTxt = document.getElementById('link-text');
+      let text, lost;
+      if (state.wsConnected) {
+        if (state.telemetryStale)      { text = 'NO TELEMETRY'; lost = true; }
+        else if (state.linkAlive)      { text = 'ARM + GLOVE OK'; lost = false; }
+        else                           { text = 'ARM OK / GLOVE LOST'; lost = true; }
+      } else {
+        text = 'WS OFFLINE';
+        lost = true;
+      }
+      dot.classList.toggle('lost', lost);
+      linkTxt.textContent = text;
+
+      document.getElementById('rssi-text').textContent = `${state.rssi} dBm`;
+      document.getElementById('mode-text').textContent = state.mode;
+      document.getElementById('dof-text').textContent = state.dofName;
+      document.getElementById('rec-frames-badge').textContent = `REC: ${state.recFrames} FRAMES`;
+
+      const battFill = document.getElementById('batt-fill');
+      const battTxt = document.getElementById('batt-text');
+      const battWrap = document.getElementById('batt-wrapper');
+      const battUnknown = state.wsConnected && !state.linkAlive;
+      battFill.style.width = battUnknown ? '0%' : `${state.batteryPct}%`;
+      battTxt.textContent = battUnknown ? '--%' : `${state.batteryPct}%`;
+      battWrap.classList.toggle('batt-low', !battUnknown && state.batteryPct <= 20);
+
+      document.querySelectorAll('.mode-grid .cyber-btn').forEach(btn => {
+        const m = btn.getAttribute('data-mode');
+        if (m) btn.classList.toggle('active', m === state.mode);
+      });
+    }
+
+    // =========================================================================
+    // G. AI MEDIAPIPE WEBCAM HAND-TRACKING (arm control + RPS player gesture)
+    // =========================================================================
+    let handsDetector = null;
+    let cameraHelper = null;
+    let lastCvStreamMs = 0;
+
+    // Player gesture history for the RPS game (rock=1, paper=2, scissors=3)
+    const playerHist = [];
+
+    function fingerExtended(lm, tip, pip) {
+      const w = lm[0];
+      const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+      return d(lm[tip], w) > d(lm[pip], w) * 1.08;
+    }
+
+    function classifyRps(lm) {
+      const idx = fingerExtended(lm, 8, 6);
+      const mid = fingerExtended(lm, 12, 10);
+      const rng = fingerExtended(lm, 16, 14);
+      const pky = fingerExtended(lm, 20, 18);
+      const n = (idx ? 1 : 0) + (mid ? 1 : 0) + (rng ? 1 : 0) + (pky ? 1 : 0);
+      if (idx && mid && !rng && !pky) return 3;   // scissors
+      if (n >= 3) return 2;                        // paper
+      if (n <= 1) return 1;                        // rock
+      return 0;                                    // ambiguous
+    }
+
+    function playerGestureMajority(windowMs) {
+      const now = performance.now();
+      const counts = [0, 0, 0, 0];
+      let total = 0;
+      for (const h of playerHist) {
+        if (now - h.t <= windowMs) { counts[h.g]++; total++; }
+      }
+      if (total < 2) return 0;
+      let best = 1;
+      for (let g = 2; g <= 3; g++) if (counts[g] > counts[best]) best = g;
+      return counts[best] > 0 ? best : 0;
+    }
+
+    async function toggleWebcam() {
+      const videoEl = document.getElementById('webcam-video');
+      const statusBadge = document.getElementById('vision-status');
+      const btn = document.getElementById('cam-start-btn');
+
+      if (state.cameraActive) {
+        if (cameraHelper) cameraHelper.stop();
+        state.cameraActive = false;
+        cv.handVisible = false;
+        btn.textContent = 'START CAM';
+        statusBadge.textContent = 'CAMERA STANDBY';
+        if (state.mode === 'CAMERA_CV') sendModeCommand('MANUAL');
+        return;
+      }
+
+      try {
+        if (typeof Hands === 'undefined' || typeof Camera === 'undefined') throw new Error('MediaPipe scripts not loaded (offline?)');
+        statusBadge.textContent = 'LOADING MEDIAPIPE AI MODEL...';
+        if (!handsDetector) {
+          handsDetector = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+          handsDetector.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.65, minTrackingConfidence: 0.65 });
+          handsDetector.onResults(onMediaPipeResults);
+        }
+
+        cameraHelper = new Camera(videoEl, {
+          onFrame: async () => {
+            if (state.cameraActive && handsDetector) await handsDetector.send({ image: videoEl });
+          },
+          width: 480,
+          height: 320
+        });
+
+        await cameraHelper.start();
+        state.cameraActive = true;
+        cv.lastFrameMs = performance.now();
+        btn.textContent = 'STOP CAM';
+        statusBadge.textContent = 'AI HAND TRACKING LIVE';
+        playSciFiBeep(1120, 0.08);
+      } catch (err) {
+        statusBadge.textContent = `CAM ERROR: ${err.message}`;
+      }
+    }
+
+    async function toggleCameraVisionMode() {
+      if (!state.cameraActive) await toggleWebcam();
+      if (state.cameraActive) sendModeCommand('CAMERA_CV');
+    }
+
+    function clampVal(v, min, max) { return Math.max(min, Math.min(max, v)); }
+    function clampServo(i, v) { return clampVal(v, SERVO_SPECS[i].min, SERVO_SPECS[i].max); }
+
+    // -------------------------------------------------------------------------
+    // Camera pose pipeline: raw landmarks -> EMA -> trailing deadband -> committed pose.
+    // The committed pose only changes when the hand really moves further than the
+    // deadband, so a still hand (landmark noise) leaves every joint exactly where it is.
+    // -------------------------------------------------------------------------
+    const cv = {
+      filt: null, pose: null, hasPose: false,
+      handVisible: false, lastFrameMs: 0, lastHandMs: 0,
+      lastSendMs: 0, sendPending: false
+    };
+
+    function cvReset() {
+      cv.filt = null; cv.pose = null; cv.hasPose = false;
+      cv.sendPending = false; cv.handVisible = false;
+      gripReset();
+    }
+
+    // -------------------------------------------------------------------------
+    // Gripper pipeline (same maths as the glove flex-sensor controller)
+    //   raw distance -> normalize by palm size -> fault check -> 4-frame average
+    //   -> EMA -> map to 0..100 % -> hard clamp.
+    // Returns the smoothed grip percentage, or null if there is no valid value yet.
+    // -------------------------------------------------------------------------
+    const grip = { buf: [], smoothed: null, pct: null, rejected: 0 };
+
+    function gripReset() {
+      grip.buf.length = 0;
+      grip.smoothed = null;
+      grip.pct = null;
+    }
+
+    function gripProcess(lm) {
+      const palm = Math.hypot(lm[9].x - lm[0].x, lm[9].y - lm[0].y);
+      const dist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
+
+      // 2) Fault tolerance: reject physically implausible readings; keep the last good value
+      if (!Number.isFinite(palm) || !Number.isFinite(dist) || palm < GRIP_PALM_MIN || palm > GRIP_PALM_MAX) {
+        grip.rejected++;
+        return grip.pct;
+      }
+      const ratio = dist / palm;               // scale-invariant: independent of distance to the camera
+      if (ratio < GRIP_RATIO_MIN || ratio > GRIP_RATIO_MAX) {
+        grip.rejected++;
+        return grip.pct;
+      }
+
+      // 1) Oversampling: average of the last GRIP_BUFFER_N valid frames
+      grip.buf.push(ratio);
+      if (grip.buf.length > GRIP_BUFFER_N) grip.buf.shift();
+      const avg = grip.buf.reduce((a, b) => a + b, 0) / grip.buf.length;
+
+      // 3) EMA: smoothed += alpha * (current - smoothed)
+      if (grip.smoothed === null) grip.smoothed = avg;
+      else grip.smoothed += GRIP_EMA_ALPHA * (avg - grip.smoothed);
+
+      // 4) Map to percent (0 = open, 100 = closed) and clamp
+      const pct = (GRIP_CAL_OPEN - grip.smoothed) / (GRIP_CAL_OPEN - GRIP_CAL_CLOSED) * 100;
+      grip.pct = clampVal(pct, 0, 100);
+      return grip.pct;
+    }
+
+    function cvFeed(raw) {
+      if (!cv.pose) {                                   // first frame of a session: seed, no smoothing lag
+        cv.filt = raw.slice();
+        cv.pose = raw.slice();
+        cv.hasPose = true;
+        cv.sendPending = true;
+      } else {
+        for (let i = 0; i < SERVO_COUNT; i++) {
+          if (i === GRIPPER) cv.filt[i] = raw[i];            // grip already went through buffer + EMA: no double smoothing
+          else cv.filt[i] += (raw[i] - cv.filt[i]) * CV_SMOOTH_ALPHA;
+          const db = (i === GRIPPER) ? CV_GRIP_DEADBAND : CV_DEADBAND_DEG;
+          const d = cv.filt[i] - cv.pose[i];
+          if (Math.abs(d) > db) {                       // trailing deadband: follows smoothly while moving, holds when still
+            cv.pose[i] = clampServo(i, cv.filt[i] - Math.sign(d) * db);
+            cv.sendPending = true;
+          }
+        }
+      }
+      state.gripPct = Math.round(((cv.pose[GRIPPER] - 50) / 60) * 100);
+    }
+
+    // Streams the committed pose to the arm. Rate-limited while moving; while holding it
+    // repeats the identical pose at a slow keep-alive so the arm never sees a changed target.
+    function pumpCvStream(now) {
+      if (!state.wsConnected || state.mode !== 'CAMERA_CV' || !cv.hasPose) return;
+      const due = cv.sendPending ? CV_MIN_SEND_MS : CV_KEEPALIVE_MS;
+      if (now - cv.lastSendMs < due) return;
+      cv.lastSendMs = now;
+      cv.sendPending = false;
+      sendJsonToArm({ cmd: "ANGLES", val: toFwAngles(cv.pose) });
+    }
+
+    function onMediaPipeResults(results) {
+      const now = performance.now();
+      cv.lastFrameMs = now;
+
+      const canvas = document.getElementById('vision-canvas');
+      const ctx = canvas.getContext('2d');
+      const statusBadge = document.getElementById('vision-status');
+
+      ctx.save();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const lm = results.multiHandLandmarks[0];
+        cv.handVisible = true;
+        cv.lastHandMs = now;
+
+        drawConnectors(ctx, lm, HAND_CONNECTIONS, { color: '#00f3ff', lineWidth: 3 });
+        drawLandmarks(ctx, lm, { color: '#ff9d00', lineWidth: 1, radius: 4 });
+
+        // --- player gesture for the Al-Hanash game ---
+        const pg = classifyRps(lm);
+        if (pg) {
+          playerHist.push({ t: now, g: pg });
+          while (playerHist.length && now - playerHist[0].t > 2500) playerHist.shift();
+          rps.liveG = pg;
+          rps.liveAt = now;
+        }
+
+        // --- 5-DOF teleoperation from hand landmarks ---
+        const palmX = 1.0 - lm[9].x;
+        const palmY = lm[9].y;
+        const handSize = Math.hypot(lm[9].x - lm[0].x, lm[9].y - lm[0].y);
+        const gripPctNow = gripProcess(lm);   // null until the first valid frame
+        const wristPitchDelta = (lm[0].y - lm[9].y) * 280;
+
+        const rawAngles = [
+          clampServo(0, 10 + palmX * 160),
+          clampServo(1, 145 - palmY * 110),
+          clampServo(2, 35 + Math.min(1, handSize * 3.4) * 110),
+          clampServo(3, clampVal(wristPitchDelta, 20, 160)),
+          // grip: percentage (0..100) -> servo angle; holds the last pose if no valid grip value exists
+          (gripPctNow === null)
+            ? (cv.pose ? cv.pose[GRIPPER] : GRIP_ANGLE_OPEN)
+            : clampServo(GRIPPER, GRIP_ANGLE_OPEN + (gripPctNow / 100) * (GRIP_ANGLE_CLOSED - GRIP_ANGLE_OPEN))
+        ];
+
+        const gripPct = gripPctNow === null ? 0 : Math.round(gripPctNow);
+        const gestureTxt = pg ? `  ${RPS_ICONS[pg]} ${RPS_NAMES[pg]}` : '';
+        statusBadge.textContent = `HAND LOCKED // GRIP: ${gripPct}% ${state.mode === 'CAMERA_CV' ? '[DRIVING ARM]' : '[PREVIEW]'}${gestureTxt}`;
+
+        // Landmarks only ever drive the pose in AI CAMERA VISION mode.
+        if (state.mode === 'CAMERA_CV') cvFeed(rawAngles);
+      } else {
+        // No hand: nothing is fed, so the committed pose (and the arm) simply holds.
+        cv.handVisible = false;
+        gripReset();                       // old frames must not mix with a re-appearing hand
+        statusBadge.textContent = state.mode === 'CAMERA_CV'
+          ? 'NO HAND IN FRAME // HOLDING LAST POSE'
+          : 'SEARCHING FOR HAND IN FRAME...';
+      }
+      ctx.restore();
+    }
+
+    // =========================================================================
+    // H. "الحنش الآلي" GAME: STATE FROM ARM (or local simulation) -> UI + SCORING
+    // =========================================================================
+    const rps = {
+      phase: 0, beat: 0, gesture: 0, round: 0,
+      playerG: 0, liveG: 0, liveAt: 0,
+      result: '', resultClass: 'none',
+      wins: 0, losses: 0, draws: 0,
+      hideAt: 0, pendingResolve: false, resolveAt: 0
+    };
+
+    function handleRpsTelemetry(phase, beat, gesture, round) {
+      const prevPhase = rps.phase;
+      const now = performance.now();
+
+      if (round !== rps.round && phase !== 0) {          // a new round has begun
+        rps.result = '';
+        rps.resultClass = 'none';
+        rps.playerG = 0;
+        rps.pendingResolve = false;
+      }
+      if (beat !== rps.beat && beat > 0 && phase === 2) {
+        triggerHapticUI(`RPS BEAT ${beat}/${RPS_T.shakes}`, 120);
+        playSciFiBeep(520 + beat * 120, 0.07, 'square');
+      }
+      if (phase === 3 && prevPhase !== 3) {
+        playSciFiBeep(1400, 0.2, 'sawtooth', 700);
+        triggerHapticUI('RPS REVEAL TRIPLE PULSE', 420);
+        rps.pendingResolve = true;
+        rps.resolveAt = now + 650;
+        rps.result = '';
+        rps.resultClass = 'none';
+      }
+      if (phase === 0) rps.pendingResolve = false;
+
+      rps.phase = phase;
+      rps.beat = beat;
+      rps.gesture = gesture;
+      rps.round = round;
+
+      if (phase === 0 && prevPhase !== 0) rps.hideAt = now + 4500;
+      else if (phase !== 0) rps.hideAt = Infinity;
+
+      renderRpsUi();
+    }
+
+    // Called ~650 ms after the arm's reveal: judge using the player's latest hand shape
+    function checkRpsResolve(now) {
+      if (!rps.pendingResolve || now < rps.resolveAt) return;
+      rps.pendingResolve = false;
+      const pg = playerGestureMajority(450);
+      rps.playerG = pg;
+
+      if (!pg || !rps.gesture) {
+        rps.result = 'NO HAND DETECTED';
+        rps.resultClass = 'none';
+        document.getElementById('rps-last').textContent = 'ROUND NOT SCORED';
+      } else {
+        const d = (pg - rps.gesture + 3) % 3;
+        if (d === 0)      { rps.draws++;  rps.result = 'DRAW';           rps.resultClass = 'draw'; }
+        else if (d === 1) { rps.wins++;   rps.result = 'YOU WIN!';       rps.resultClass = 'win'; }
+        else              { rps.losses++; rps.result = 'AL-HANASH WINS'; rps.resultClass = 'lose'; }
+        document.getElementById('rps-last').textContent = `${RPS_NAMES[pg]} vs ${RPS_NAMES[rps.gesture]}`;
+        playSciFiBeep(rps.resultClass === 'win' ? 1320 : (rps.resultClass === 'lose' ? 180 : 700), 0.25, 'triangle');
+      }
+      document.getElementById('score-player').textContent = rps.wins;
+      document.getElementById('score-arm').textContent = rps.losses;
+      document.getElementById('score-draw').textContent = rps.draws;
+      renderRpsUi();
+    }
+
+    function renderRpsUi() {
+      const ov = document.getElementById('rps-overlay');
+      if (!ov) return;
+      const now = performance.now();
+      const visible = rps.phase !== 0 || now < rps.hideAt;
+      ov.classList.toggle('hidden', !visible);
+      if (!visible) return;
+
+      const phaseEl = document.getElementById('rps-phase-text');
+      let phaseText;
+      if (rps.phase === 2)      phaseText = `COUNTDOWN ${rps.beat}/${RPS_T.shakes}`;
+      else if (rps.phase === 3) phaseText = rps.result ? 'ROUND RESULT' : 'SHOOT!';
+      else if (rps.phase === 0) phaseText = rps.result ? 'ROUND COMPLETE' : RPS_PHASE_NAMES[0];
+      else                      phaseText = RPS_PHASE_NAMES[rps.phase];
+      phaseEl.textContent = phaseText;
+      phaseEl.classList.toggle('shoot', rps.phase === 3 && !rps.result);
+
+      for (let i = 0; i < RPS_T.shakes; i++) {
+        document.getElementById(`beat-${i}`).classList.toggle('on', rps.phase >= 3 || (rps.phase === 2 && i < rps.beat));
+      }
+
+      const armShown = (rps.phase >= 3 || rps.result) ? rps.gesture : 0;
+      document.getElementById('rps-arm-icon').textContent = RPS_ICONS[armShown];
+      document.getElementById('rps-arm-name').textContent = RPS_NAMES[armShown];
+
+      let playerShown = 0;
+      if (rps.result) playerShown = rps.playerG;
+      else if (now - rps.liveAt < 500) playerShown = rps.liveG;
+      document.getElementById('rps-player-icon').textContent = RPS_ICONS[playerShown];
+      document.getElementById('rps-player-name').textContent = RPS_NAMES[playerShown];
+
+      const resEl = document.getElementById('rps-result');
+      resEl.textContent = rps.result;
+      resEl.className = `rps-result ${rps.resultClass}`;
+
+      document.getElementById('rps-hint').textContent = rps.phase === 0
+        ? ''
+        : (state.cameraActive ? 'SHOW YOUR HAND AT THE SHOOT BEAT' : 'START THE CAMERA TO PLAY AGAINST AL-HANASH');
+    }
+
+    // =========================================================================
+    // I. OFFLINE SIMULATION (physics + local copy of the arm's game state machine)
+    // =========================================================================
+    const sim = { active: false, phase: 0, start: 0, half: -1, beat: 0, gesture: 0, round: 0, snap: false, snipAt: 0, snipOpen: false };
+
+    function setTargets(pose) { pose.forEach((a, i) => { SERVO_SPECS[i].target = clampServo(i, a); }); }
+    function atTargets(tol) { return SERVO_SPECS.every(s => Math.abs(s.target - s.current) <= tol); }
+    function simPush() { handleRpsTelemetry(sim.phase, sim.beat, sim.gesture, sim.round); }
+
+    function simStartRps(now) {
+      sim.active = true;
+      sim.phase = 1;
+      sim.start = now;
+      sim.half = -1;
+      sim.beat = 0;
+      sim.gesture = 0;
+      sim.snap = false;
+      sim.round++;
+      state.mode = 'RPS_GAME';
+      setTargets(RPS_POSES.ready);
+      simPush();
+      updateHeaderIndicators();
+    }
+
+    function rpsAbortLocal() {
+      sim.active = false;
+      sim.phase = 0;
+      sim.snap = false;
+      handleRpsTelemetry(0, 0, rps.gesture, rps.round);
+    }
+
+    function simStepRps(now) {
+      const t = now - sim.start;
+      switch (sim.phase) {
+        case 1:
+          if (atTargets(RPS_T.readyTol) || t > RPS_T.readyTimeout) {
+            sim.phase = 2; sim.start = now; sim.half = -1; simPush();
+          }
+          break;
+        case 2: {
+          const h = Math.floor(t / RPS_T.halfMs);
+          if (h === sim.half) break;
+          sim.half = h;
+          if (h >= 2 * RPS_T.shakes) {
+            sim.gesture = 1 + Math.floor(Math.random() * 3);
+            sim.snap = true;
+            setTargets(RPS_POSES[sim.gesture]);
+            sim.phase = 3; sim.start = now; sim.snipAt = now; sim.snipOpen = false;
+            simPush();
+          } else if (h % 2 === 0) {
+            setTargets(RPS_POSES.up);
+          } else {
+            setTargets(RPS_POSES.down);
+            sim.beat = (h + 1) / 2;
+            simPush();
+          }
+          break;
+        }
+        case 3:
+          if (sim.gesture === 3 && t >= RPS_T.snipStart && now - sim.snipAt >= RPS_T.snipPeriod) {
+            sim.snipAt = now;
+            sim.snipOpen = !sim.snipOpen;
+            SERVO_SPECS[GRIPPER].target = clampServo(GRIPPER, sim.snipOpen ? RPS_T.snipB : RPS_T.snipA);
+          }
+          if (t >= RPS_T.hold) {
+            sim.snap = false;
+            SERVO_SPECS.forEach(s => { s.target = s.home; });
+            sim.phase = 4; sim.start = now; simPush();
+          }
+          break;
+        case 4:
+          if (atTargets(AT_TARGET_TOL) || t > RPS_T.returnTimeout) {
+            sim.phase = 0;
+            sim.active = false;
+            state.mode = 'MANUAL';
+            simPush();
+            updateHeaderIndicators();
+          }
+          break;
+        default:
+          break;
+      }
+    }
+
+    const AT_TARGET_TOL = 0.6;
+
+    // Same easing law as the firmware ServoBank::update (exponential + slew-rate cap)
+    function easeToTargets(dt, rate, speedScale) {
+      const blend = Math.min(1, rate * dt);
+      SERVO_SPECS.forEach(s => {
+        const diff = s.target - s.current;
+        if (Math.abs(diff) < 0.05) { s.current = s.target; return; }
+        let step = diff * blend;
+        const maxStep = s.maxDps * speedScale * dt;
+        step = Math.max(-maxStep, Math.min(maxStep, step));
+        s.current += step;
+      });
+    }
+
+    // Freeze: make every servo target/actual equal to what the twin currently shows.
+    function holdPoseNow() {
+      SERVO_SPECS.forEach(s => { s.target = s.current; s.actual = s.current; });
+    }
+
+    // Smooth the *display* pose toward a source pose; snaps exactly once close, so a held
+    // source produces a perfectly static twin instead of an endless asymptotic crawl.
+    function followPose(dt, rate, key) {
+      const k = Math.min(1, dt * rate);
+      SERVO_SPECS.forEach(s => {
+        const diff = s[key] - s.current;
+        if (Math.abs(diff) < SNAP_DEG) { s.current = s[key]; return; }
+        s.current += diff * k;
+      });
+    }
+
+    let _prevMode = state.mode;
+
+    // The ONLY place the displayed pose changes. No time-based or random motion exists here:
+    // every branch either follows a real data source, plays an operator-requested sequence
+    // (HOME / RPS, offline preview only), or returns and leaves the pose untouched.
+    function stepPhysics(now, dt) {
+      if (state.mode !== _prevMode) {
+        if (_prevMode === 'CAMERA_CV') cvReset();      // re-entering vision mode must never replay a stale hand pose
+        _prevMode = state.mode;
+      }
+
+      if (state.wsConnected) {
+        if (state.mode === 'CAMERA_CV') {
+          // Hand pose drives the arm (ANGLES stream) and the twin directly.
+          if (cv.hasPose) {
+            SERVO_SPECS.forEach((s, i) => { s.target = cv.pose[i]; });
+            followPose(dt, CV_TWIN_FOLLOW, 'target');
+          }
+          return;
+        }
+        // GLOVE MANUAL / RECORD / PLAYBACK / HOME / RPS ...: mirror the arm's real angles.
+        if (!state.hasTelemetry || state.telemetryStale) return;   // no fresh data -> hold last pose
+        followPose(dt, TELEMETRY_FOLLOW, 'actual');
+        return;
+      }
+
+      // ----- Offline (no arm link) -----
+      if (state.mode === 'ESTOP') return;
+
+      if (state.mode === 'RPS_GAME') {
+        simStepRps(now);
+        easeToTargets(dt, sim.snap ? 60 : 25, sim.phase === 4 ? 0.4 : 1.0);
+        return;
+      }
+      if (state.mode === 'HOMING') {
+        SERVO_SPECS.forEach(s => { s.target = s.home; });
+        easeToTargets(dt, 25, 0.4);
+        if (atTargets(AT_TARGET_TOL)) {
+          state.mode = 'MANUAL';
+          logSerial('[HOME] Home reached');
+          updateHeaderIndicators();
+        }
+        return;
+      }
+      if (state.mode === 'CAMERA_CV') {
+        if (cv.hasPose) {
+          SERVO_SPECS.forEach((s, i) => { s.target = cv.pose[i]; });
+          followPose(dt, CV_TWIN_FOLLOW, 'target');
+        }
+        return;
+      }
+
+      // Offline GLOVE MANUAL: only the operator's sliders can move a joint; unchanged target == static pose.
+      easeToTargets(dt, 25, 1.0);
+    }
+
+    // Link / hold status shown on the twin. Re-evaluated every frame, DOM touched only on change.
+    let _bannerKey = '';
+    function updateLinkBanner(now) {
+      const el = document.getElementById('link-banner');
+      if (!el) return;
+      const camMode = state.mode === 'CAMERA_CV';
+      let level = '', text = '';
+
+      if (state.wsConnected && state.telemetryStale) {
+        level = 'alert'; text = 'TELEMETRY STALLED — HOLDING LAST POSE';
+      } else if (camMode && state.cameraActive && now - cv.lastFrameMs > CAMERA_STALE_MS) {
+        level = 'alert'; text = 'CAMERA FEED STALLED — HOLDING LAST POSE';
+      } else if (camMode && state.cameraActive && !cv.handVisible) {
+        level = 'warn'; text = 'NO HAND IN FRAME — HOLDING LAST POSE';
+      } else if (!state.wsConnected) {
+        if (camMode) { level = 'info'; text = 'NO ARM LINK — TWIN DRIVEN BY CAMERA ONLY'; }
+        else         { level = 'warn'; text = 'NO ARM LINK — HOLDING LAST POSE'; }
+      } else if (!state.hasTelemetry) {
+        level = 'warn'; text = 'WAITING FOR FIRST TELEMETRY — POSE HELD';
+      } else if (!camMode && !state.linkAlive && (state.mode === 'MANUAL' || state.mode === 'RECORD')) {
+        level = 'warn'; text = 'GLOVE LINK LOST — ARM HOLDING POSITION';
+      }
+
+      const key = `${level}|${text}`;
+      if (key === _bannerKey) return;
+      _bannerKey = key;
+      el.className = level ? `link-banner show ${level}` : 'link-banner';
+      el.textContent = text;
+    }
+
+    document.getElementById('ws-connect-btn').addEventListener('click', toggleWsConnection);
+    document.getElementById('ws-host').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.stopPropagation(); if (!ws && !wsWanted) toggleWsConnection(); }
+    });
+
+    document.getElementById('audio-toggle-btn').addEventListener('click', (e) => {
+      state.sfxEnabled = !state.sfxEnabled;
+      e.target.textContent = `SFX: ${state.sfxEnabled ? 'ON' : 'OFF'}`;
+      if (state.sfxEnabled) playSciFiBeep(880, 0.05);
+    });
+
+    function drawIdleCameraCanvas(t) {
+      if (state.cameraActive) return;
+      const canvas = document.getElementById('vision-canvas');
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.strokeStyle = 'rgba(0, 243, 255, 0.15)';
+      ctx.lineWidth = 1;
+      const scanY = (t * 0.08) % h;
+      ctx.beginPath();
+      ctx.moveTo(0, scanY);
+      ctx.lineTo(w, scanY);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, 42 + Math.sin(t * 0.004) * 6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // =========================================================================
+    // J. MAIN RENDER LOOP
+    // =========================================================================
+    let lastFpsTime = performance.now();
+    let lastFrameMs = performance.now();
+    let frameCounter = 0;
+
+    let _lastHeaderMs = 0;
+
+    function mainLoop(now) {
+      const dt = Math.min(0.1, Math.max(0.001, (now - lastFrameMs) / 1000));
+      lastFrameMs = now;
+
+      frameCounter++;
+      if (now - lastFpsTime >= 1000) {
+        document.getElementById('fps-counter').textContent = `${frameCounter} FPS`;
+        frameCounter = 0;
+        lastFpsTime = now;
+      }
+
+      // Telemetry watchdog: stalled packets freeze the pose and raise the link warning.
+      if (state.wsConnected && !state.telemetryStale && now - state.lastTelemetryMs > TELEMETRY_STALE_MS) {
+        state.telemetryStale = true;
+        logSerial('[WS] Telemetry stalled - twin frozen at last pose.');
+        updateHeaderIndicators();
+      }
+
+      stepPhysics(now, dt);
+      pumpCvStream(now);
+      checkRpsResolve(now);
+      if (rps.phase !== 0 || (rps.hideAt !== Infinity && now < rps.hideAt + 400)) renderRpsUi();
+
+      renderJointTelemetry(now);
+      renderImuHorizon();
+      update3DKinematics();
+      drawIdleCameraCanvas(now);
+      updateLinkBanner(now);
+
+      if (now - _lastHeaderMs >= 250) { _lastHeaderMs = now; updateHeaderIndicators(); }
+
+      requestAnimationFrame(mainLoop);
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      try {
+        const saved = localStorage.getItem('alhawnash.host');
+        if (saved) document.getElementById('ws-host').value = saved;
+      } catch (e) { /* storage optional */ }
+      initJointCards();
+      init3DDigitalTwin();
+      updateHeaderIndicators();
+      runBootSequence();
+      requestAnimationFrame(mainLoop);
+    });
+  </script>
+</body>
+</html>
